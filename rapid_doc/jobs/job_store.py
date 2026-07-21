@@ -73,7 +73,10 @@ class JobStore:
         self.settings = settings
 
     def create_or_reuse_job(
-        self, submission: JobSubmission, now: int | None = None
+        self,
+        submission: JobSubmission,
+        now: int | None = None,
+        job_id: str | None = None,
     ) -> JobCreation:
         now = _current_timestamp() if now is None else now
         idempotency_key_hash = hash_idempotency_key(submission.idempotency_key)
@@ -116,7 +119,7 @@ class JobStore:
                 )
                 cache_row = None
 
-            job_id = generate_ulid()
+            job_id = generate_ulid() if job_id is None else job_id
             if cache_row is not None and cache_row["cache_state"] == CacheState.READY.value:
                 job = self._insert_job(
                     connection,

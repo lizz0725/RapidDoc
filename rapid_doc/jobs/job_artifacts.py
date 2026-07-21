@@ -14,8 +14,17 @@ class ArtifactStore:
         self.root = root
 
     def ensure_layout(self) -> None:
-        for path in (self.root, self.root / "inputs", self.root / "attempts", self.root / "cache"):
+        for path in (
+            self.root,
+            self.root / "inputs",
+            self.root / "attempts",
+            self.root / "cache",
+            self.root / "staging",
+        ):
             path.mkdir(parents=True, exist_ok=True)
+
+    def staging_path(self, upload_token: str) -> Path:
+        return self.root / "staging" / f"{_safe_component(upload_token)}.upload"
 
     def input_path(self, job_id: str, stored_filename: str) -> Path:
         return self.root / "inputs" / _safe_component(job_id) / _safe_filename(stored_filename)
@@ -58,10 +67,30 @@ class ArtifactStore:
         destination.parent.mkdir(parents=True, exist_ok=True)
         os.replace(temporary_path, destination)
 
+    def retained_bytes(self) -> int:
+        """统计受第一期固定磁盘预算约束的任务文件。"""
+
+        total = 0
+        for directory in ("inputs", "attempts", "cache", "staging"):
+            root = self.root / directory
+            if not root.exists():
+                continue
+            for path in root.rglob("*"):
+                if path.is_file():
+                    total += path.stat().st_size
+        return total
+
+    def remove_file(self, path: Path) -> None:
+        self._assert_within_root(path)
+        path.unlink(missing_ok=True)
+
     def remove_tree(self, path: Path) -> None:
+        self._assert_within_root(path)
+        shutil.rmtree(path, ignore_errors=True)
+
+    def _assert_within_root(self, path: Path) -> None:
         if self.root not in (path, *path.parents):
             raise ValueError("refusing to delete a path outside the artifact root")
-        shutil.rmtree(path, ignore_errors=True)
 
 
 def tenant_storage_key(tenant_id: str) -> str:

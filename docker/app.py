@@ -21,6 +21,7 @@ from loguru import logger
 
 from file_converter import ensure_pdf, OFFICE_EXTENSIONS
 from rapid_doc.cli.common import aio_do_parse, old_office_suffixes, pdf_suffixes, image_suffixes, office_suffixes
+from rapid_doc.jobs.job_api import install_job_api
 from rapid_doc.utils.empty_office import normalize_empty_office_bytes
 from rapid_doc.utils.office_converter import convert_legacy_office_to_modern
 from rapid_doc.utils.pdf_image_tools import images_bytes_to_pdf_bytes
@@ -33,6 +34,7 @@ app = FastAPI(
     version=__version__
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+install_job_api(app)
 
 @app.get("/health")
 async def health_check():
