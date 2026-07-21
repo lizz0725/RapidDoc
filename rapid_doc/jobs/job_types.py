@@ -32,12 +32,6 @@ class CacheRole(TextEnum):
     HIT = "hit"
 
 
-class ResultSource(TextEnum):
-    OCR = "ocr"
-    SHARED_INFLIGHT = "shared_inflight"
-    CACHE = "cache"
-
-
 class CacheState(TextEnum):
     PROCESSING = "processing"
     READY = "ready"

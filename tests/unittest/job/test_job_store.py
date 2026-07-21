@@ -14,7 +14,7 @@ from rapid_doc.jobs.job_store import (
     JobStore,
     JobSubmission,
 )
-from rapid_doc.jobs.job_types import CacheRole, CacheState, JobState, ResultSource
+from rapid_doc.jobs.job_types import CacheRole, CacheState, JobState
 
 
 class JobStoreTest(unittest.TestCase):
@@ -39,10 +39,8 @@ class JobStoreTest(unittest.TestCase):
             request_fingerprint=fingerprint,
             source_filename="contract.pdf",
             stored_filename="contract.pdf",
-            source_extension="pdf",
             source_sha256=digest,
             source_bytes=12,
-            input_path=f"inputs/{digest}.pdf",
             idempotency_key=idempotency_key,
         )
 
@@ -91,7 +89,6 @@ class JobStoreTest(unittest.TestCase):
 
         self.assertEqual(hit.job["job_state"], JobState.SUCCEEDED.value)
         self.assertEqual(hit.job["cache_role"], CacheRole.HIT.value)
-        self.assertEqual(hit.job["result_source"], ResultSource.CACHE.value)
         self.assertEqual(hit.job["result_path"], "cache/finance/result.json")
 
     def test_idempotency_reuses_same_request_and_rejects_different_request(self) -> None:
@@ -126,7 +123,6 @@ class JobStoreTest(unittest.TestCase):
             claims = list(
                 executor.map(
                     lambda index: self.store.claim_next_job(
-                        worker_id=f"worker-{index}",
                         attempt_token=f"attempt-{index}",
                         now=self.now + 10 + index,
                     ),

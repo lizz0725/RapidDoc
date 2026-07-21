@@ -74,6 +74,9 @@ class JobFoundationTest(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type = 'index'"
                 )
             }
+            job_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(jobs)")
+            }
         finally:
             connection.close()
 
@@ -81,6 +84,17 @@ class JobFoundationTest(unittest.TestCase):
         self.assertTrue({"jobs", "parse_cache", "callback_outbox", "service_heartbeats"} <= tables)
         self.assertIn("jobs_tenant_idempotency_key_unique", indexes)
         self.assertIn("parse_cache_state_expires_at_index", indexes)
+        self.assertEqual(len(job_columns), 28)
+        self.assertFalse(
+            {
+                "source_extension",
+                "input_path",
+                "result_source",
+                "worker_id",
+                "result_bytes",
+            }
+            & job_columns
+        )
 
     def test_artifact_store_writes_and_publishes_only_inside_the_root(self) -> None:
         store = ArtifactStore(self.root / "jobs")

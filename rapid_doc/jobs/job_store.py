@@ -17,7 +17,7 @@ from typing import Any
 from .job_config import JobSettings
 from .job_database import connect_database
 from .job_limits import JobAdmissionLimits
-from .job_types import CacheRole, CacheState, JobState, ResultSource, generate_ulid
+from .job_types import CacheRole, CacheState, JobState, generate_ulid
 
 
 class IdempotencyConflictError(Exception):
@@ -34,10 +34,8 @@ class JobSubmission:
     request_fingerprint: str
     source_filename: str
     stored_filename: str
-    source_extension: str
     source_sha256: str
     source_bytes: int
-    input_path: str
     business_ref: str | None = None
     callback_url: str | None = None
     idempotency_key: str | None = None
@@ -55,12 +53,9 @@ class JobCreation:
 
 _MUTABLE_JOB_COLUMNS = frozenset(
     {
-        "result_source",
         "active_attempt_token",
-        "worker_id",
         "lease_expires_at",
         "result_path",
-        "result_bytes",
         "result_expires_at",
         "tombstone_expires_at",
         "started_at",
@@ -132,9 +127,7 @@ class JobStore:
                     warnings_json=warnings_json,
                     job_state=JobState.SUCCEEDED,
                     cache_role=CacheRole.HIT,
-                    result_source=ResultSource.CACHE,
                     result_path=cache_row["result_path"],
-                    result_bytes=cache_row["result_bytes"],
                     result_expires_at=now + self.settings.result_ttl_seconds,
                     finished_at=now,
                 )
@@ -208,7 +201,7 @@ class JobStore:
             connection.close()
 
     def claim_next_job(
-        self, worker_id: str, attempt_token: str, now: int | None = None
+        self, attempt_token: str, now: int | None = None
     ) -> dict[str, Any] | None:
         now = _current_timestamp() if now is None else now
         connection = connect_database(self.database_path)
@@ -231,7 +224,7 @@ class JobStore:
                 """
                 UPDATE jobs
                 SET job_state = ?, processing_attempt = processing_attempt + 1,
-                    active_attempt_token = ?, worker_id = ?, lease_expires_at = ?,
+                    active_attempt_token = ?, lease_expires_at = ?,
                     started_at = COALESCE(started_at, ?)
                 WHERE job_id = ? AND job_state = ? AND cache_role = ?
                   AND processing_attempt < ?
@@ -239,7 +232,6 @@ class JobStore:
                 (
                     JobState.RUNNING.value,
                     attempt_token,
-                    worker_id,
                     now + self.settings.lease_seconds,
                     now,
                     row["job_id"],
@@ -343,9 +335,7 @@ class JobStore:
         job_state: JobState,
         cache_role: CacheRole,
         queue_seq: int | None = None,
-        result_source: ResultSource | None = None,
         result_path: str | None = None,
-        result_bytes: int | None = None,
         result_expires_at: int | None = None,
         finished_at: int | None = None,
     ) -> dict[str, Any]:
@@ -353,12 +343,11 @@ class JobStore:
             """
             INSERT INTO jobs (
                 job_id, tenant_id, queue_seq, idempotency_key_hash, request_fingerprint,
-                source_filename, stored_filename, business_ref, source_extension,
-                source_sha256, source_bytes, input_path, job_state, cache_role,
-                result_source, callback_url, result_path, result_bytes,
+                source_filename, stored_filename, business_ref, source_sha256,
+                source_bytes, job_state, cache_role, callback_url, result_path,
                 source_page_count, processed_page_count, truncated, warnings_json,
                 result_expires_at, submitted_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -369,16 +358,12 @@ class JobStore:
                 submission.source_filename,
                 submission.stored_filename,
                 submission.business_ref,
-                submission.source_extension,
                 submission.source_sha256,
                 submission.source_bytes,
-                submission.input_path,
                 job_state.value,
                 cache_role.value,
-                result_source.value if result_source is not None else None,
                 submission.callback_url,
                 result_path,
-                result_bytes,
                 submission.source_page_count,
                 submission.processed_page_count,
                 int(submission.truncated),
