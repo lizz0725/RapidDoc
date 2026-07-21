@@ -45,6 +45,12 @@ CREATE INDEX IF NOT EXISTS jobs_tenant_job_index ON jobs(tenant_id, job_id);
 CREATE INDEX IF NOT EXISTS jobs_result_expires_at_index ON jobs(result_expires_at);
 CREATE INDEX IF NOT EXISTS jobs_lease_expires_at_index ON jobs(lease_expires_at);
 
+CREATE TABLE IF NOT EXISTS job_queue_sequence (
+    sequence_name TEXT PRIMARY KEY,
+    last_value INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO job_queue_sequence(sequence_name, last_value) VALUES ('ocr', 0);
+
 CREATE TABLE IF NOT EXISTS parse_cache (
     tenant_id TEXT NOT NULL,
     source_sha256 TEXT NOT NULL,
