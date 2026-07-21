@@ -144,10 +144,15 @@ class JobStore:
                 )
                 connection.execute(
                     """
-                    UPDATE parse_cache SET last_accessed_at = ?
-                    WHERE tenant_id = ? AND source_sha256 = ?
-                    """,
-                    (now, submission.tenant_id, submission.source_sha256),
+                UPDATE parse_cache SET last_accessed_at = ?, expires_at = ?
+                WHERE tenant_id = ? AND source_sha256 = ?
+                """,
+                    (
+                        now,
+                        now + self.settings.cache_ttl_seconds,
+                        submission.tenant_id,
+                        submission.source_sha256,
+                    ),
                 )
             elif cache_row is not None:
                 job = self._insert_job(
@@ -265,10 +270,17 @@ class JobStore:
 
             updated = connection.execute(
                 """
-                UPDATE jobs SET job_state = ?, finished_at = ?
+                UPDATE jobs SET job_state = ?, finished_at = ?, tombstone_expires_at = ?
                 WHERE tenant_id = ? AND job_id = ? AND job_state = ?
                 """,
-                (JobState.CANCELLED.value, now, tenant_id, job_id, job["job_state"]),
+                (
+                    JobState.CANCELLED.value,
+                    now,
+                    now + self.settings.tombstone_ttl_seconds,
+                    tenant_id,
+                    job_id,
+                    job["job_state"],
+                ),
             )
             if updated.rowcount != 1:
                 connection.commit()
@@ -311,7 +323,7 @@ class JobStore:
                 UPDATE jobs
                 SET job_state = ?, processing_attempt = processing_attempt + 1,
                     active_attempt_token = ?, lease_expires_at = ?,
-                    started_at = COALESCE(started_at, ?)
+                    started_at = ?
                 WHERE job_id = ? AND job_state = ? AND cache_role = ?
                   AND processing_attempt < ?
                 """,
@@ -490,13 +502,15 @@ class JobStore:
             connection.execute(
                 """
                 UPDATE jobs
-                SET job_state = ?, finished_at = ?, error_code = ?, error_message = ?,
-                    active_attempt_token = NULL, lease_expires_at = NULL
+                SET job_state = ?, finished_at = ?, tombstone_expires_at = ?,
+                    error_code = ?, error_message = ?, active_attempt_token = NULL,
+                    lease_expires_at = NULL
                 WHERE job_id = ? AND job_state = ? AND active_attempt_token = ?
                 """,
                 (
                     JobState.FAILED.value,
                     now,
+                    now + self.settings.tombstone_ttl_seconds,
                     error_code,
                     error_message,
                     job_id,
@@ -507,6 +521,378 @@ class JobStore:
             self._promote_follower_or_clear_cache(connection, owner, now)
             connection.commit()
             return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def recover_expired_running_jobs(self, now: int | None = None) -> int:
+        """处理失去租约的 running owner，重新排队或在达到上限后失败。"""
+
+        now = _current_timestamp() if now is None else now
+        connection = connect_database(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE job_state = ? AND cache_role = ? AND lease_expires_at <= ?
+                ORDER BY queue_seq ASC
+                """,
+                (JobState.RUNNING.value, CacheRole.OWNER.value, now),
+            ).fetchall()
+            for row in rows:
+                job = dict(row)
+                if job["processing_attempt"] >= self.settings.max_processing_attempts:
+                    updated = connection.execute(
+                        """
+                        UPDATE jobs
+                        SET job_state = ?, finished_at = ?, tombstone_expires_at = ?,
+                            error_code = ?, error_message = ?, active_attempt_token = NULL,
+                            lease_expires_at = NULL
+                        WHERE job_id = ? AND job_state = ? AND lease_expires_at <= ?
+                        """,
+                        (
+                            JobState.FAILED.value,
+                            now,
+                            now + self.settings.tombstone_ttl_seconds,
+                            "OCR_LEASE_EXPIRED",
+                            "OCR Worker 租约已失效，且已达到最大处理次数。",
+                            job["job_id"],
+                            JobState.RUNNING.value,
+                            now,
+                        ),
+                    )
+                    if updated.rowcount == 1:
+                        self._promote_follower_or_clear_cache(connection, job, now)
+                    continue
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET job_state = ?, queue_seq = ?, active_attempt_token = NULL,
+                        lease_expires_at = NULL
+                    WHERE job_id = ? AND job_state = ? AND lease_expires_at <= ?
+                    """,
+                    (
+                        JobState.QUEUED.value,
+                        self._next_queue_seq(connection),
+                        job["job_id"],
+                        JobState.RUNNING.value,
+                        now,
+                    ),
+                )
+            connection.commit()
+            return len(rows)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def fail_overlong_running_jobs(self, now: int | None = None) -> int:
+        """终止超过最大运行时长的 owner，避免持续续租的异常任务阻塞队列。"""
+
+        now = _current_timestamp() if now is None else now
+        deadline = now - self.settings.max_run_seconds
+        connection = connect_database(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE job_state = ? AND cache_role = ? AND started_at <= ?
+                ORDER BY queue_seq ASC
+                """,
+                (JobState.RUNNING.value, CacheRole.OWNER.value, deadline),
+            ).fetchall()
+            for row in rows:
+                job = dict(row)
+                updated = connection.execute(
+                    """
+                    UPDATE jobs
+                    SET job_state = ?, finished_at = ?, tombstone_expires_at = ?,
+                        error_code = ?, error_message = ?, active_attempt_token = NULL,
+                        lease_expires_at = NULL
+                    WHERE job_id = ? AND job_state = ? AND started_at <= ?
+                    """,
+                    (
+                        JobState.FAILED.value,
+                        now,
+                        now + self.settings.tombstone_ttl_seconds,
+                        "OCR_RUN_TIMEOUT",
+                        "任务运行时间超过 RAPID_DOC_JOB_MAX_RUN_MINUTES。",
+                        job["job_id"],
+                        JobState.RUNNING.value,
+                        deadline,
+                    ),
+                )
+                if updated.rowcount == 1:
+                    self._promote_follower_or_clear_cache(connection, job, now)
+            connection.commit()
+            return len(rows)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def list_publishing_jobs(self) -> list[dict[str, Any]]:
+        """列出需要由维护进程检查落盘结果的发布中 owner。"""
+
+        connection = connect_database(self.database_path)
+        try:
+            rows = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE job_state = ? AND cache_role = ? AND active_attempt_token IS NOT NULL
+                ORDER BY started_at ASC, job_id ASC
+                """,
+                (JobState.PUBLISHING.value, CacheRole.OWNER.value),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()
+
+    def requeue_incomplete_publishing(
+        self,
+        job_id: str,
+        attempt_token: str,
+        now: int | None = None,
+    ) -> bool:
+        """发布文件不完整时收敛 attempt：可重试则重排，否则提升 follower。"""
+
+        now = _current_timestamp() if now is None else now
+        connection = connect_database(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE job_id = ? AND job_state = ? AND cache_role = ?
+                      AND active_attempt_token = ?
+                """,
+                (job_id, JobState.PUBLISHING.value, CacheRole.OWNER.value, attempt_token),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return False
+            job = dict(row)
+            if job["processing_attempt"] >= self.settings.max_processing_attempts:
+                updated = connection.execute(
+                    """
+                    UPDATE jobs
+                    SET job_state = ?, finished_at = ?, tombstone_expires_at = ?,
+                        error_code = ?, error_message = ?, active_attempt_token = NULL,
+                        lease_expires_at = NULL
+                    WHERE job_id = ? AND job_state = ? AND active_attempt_token = ?
+                    """,
+                    (
+                        JobState.FAILED.value,
+                        now,
+                        now + self.settings.tombstone_ttl_seconds,
+                        "PUBLISHING_ARTIFACT_MISSING",
+                        "任务在发布阶段中断，且已达到最大处理次数。",
+                        job_id,
+                        JobState.PUBLISHING.value,
+                        attempt_token,
+                    ),
+                )
+                if updated.rowcount == 1:
+                    self._promote_follower_or_clear_cache(connection, job, now)
+            else:
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET job_state = ?, queue_seq = ?, active_attempt_token = NULL,
+                        lease_expires_at = NULL, error_code = ?, error_message = ?
+                    WHERE job_id = ? AND job_state = ? AND active_attempt_token = ?
+                    """,
+                    (
+                        JobState.QUEUED.value,
+                        self._next_queue_seq(connection),
+                        "PUBLISHING_ARTIFACT_MISSING",
+                        "任务在发布阶段中断，已重新排队。",
+                        job_id,
+                        JobState.PUBLISHING.value,
+                        attempt_token,
+                    ),
+                )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def expire_queued_jobs(self, now: int | None = None) -> int:
+        """使超出保留期的未完成任务终态化，并解除超期 owner 的缓存互斥。"""
+
+        now = _current_timestamp() if now is None else now
+        deadline = now - self.settings.queue_expire_seconds
+        connection = connect_database(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            follower_rows = connection.execute(
+                """
+                SELECT job_id FROM jobs
+                WHERE job_state = ? AND cache_role = ? AND submitted_at <= ?
+                """,
+                (JobState.WAITING_FOR_RESULT.value, CacheRole.FOLLOWER.value, deadline),
+            ).fetchall()
+            for row in follower_rows:
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET job_state = ?, finished_at = ?, tombstone_expires_at = ?,
+                        error_code = ?, error_message = ?
+                    WHERE job_id = ? AND job_state = ? AND cache_role = ?
+                    """,
+                    (
+                        JobState.EXPIRED.value,
+                        now,
+                        now + self.settings.tombstone_ttl_seconds,
+                        "QUEUE_EXPIRED",
+                        "任务等待共享结果时间超过 RAPID_DOC_QUEUE_EXPIRE_MINUTES。",
+                        row["job_id"],
+                        JobState.WAITING_FOR_RESULT.value,
+                        CacheRole.FOLLOWER.value,
+                    ),
+                )
+
+            owner_rows = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE job_state = ? AND cache_role = ? AND submitted_at <= ?
+                ORDER BY queue_seq ASC
+                """,
+                (JobState.QUEUED.value, CacheRole.OWNER.value, deadline),
+            ).fetchall()
+            for row in owner_rows:
+                job = dict(row)
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET job_state = ?, finished_at = ?, tombstone_expires_at = ?,
+                        error_code = ?, error_message = ?
+                    WHERE job_id = ? AND job_state = ?
+                    """,
+                    (
+                        JobState.EXPIRED.value,
+                        now,
+                        now + self.settings.tombstone_ttl_seconds,
+                        "QUEUE_EXPIRED",
+                        "任务排队时间超过 RAPID_DOC_QUEUE_EXPIRE_MINUTES。",
+                        job["job_id"],
+                        JobState.QUEUED.value,
+                    ),
+                )
+                self._promote_follower_or_clear_cache(connection, job, now)
+            connection.commit()
+            return len(follower_rows) + len(owner_rows)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def expire_job_results(self, now: int | None = None) -> int:
+        """让成功 Job 停止对外提供结果，但不抢先删除仍可能被引用的缓存。"""
+
+        now = _current_timestamp() if now is None else now
+        connection = connect_database(self.database_path)
+        try:
+            updated = connection.execute(
+                """
+                UPDATE jobs
+                SET job_state = ?, tombstone_expires_at = ?
+                WHERE job_state = ? AND result_expires_at <= ?
+                """,
+                (
+                    JobState.RESULT_EXPIRED.value,
+                    now + self.settings.tombstone_ttl_seconds,
+                    JobState.SUCCEEDED.value,
+                    now,
+                ),
+            )
+            return updated.rowcount
+        finally:
+            connection.close()
+
+    def remove_expired_caches(self, now: int | None = None) -> list[dict[str, str]]:
+        """删除没有活跃成功 Job 引用的过期缓存记录，返回待删文件坐标。"""
+
+        now = _current_timestamp() if now is None else now
+        connection = connect_database(self.database_path)
+        removed: list[dict[str, str]] = []
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT * FROM parse_cache
+                WHERE cache_state = ? AND expires_at <= ?
+                """,
+                (CacheState.READY.value, now),
+            ).fetchall()
+            for cache in rows:
+                active_result = connection.execute(
+                    """
+                    SELECT MAX(result_expires_at) FROM jobs
+                    WHERE tenant_id = ? AND source_sha256 = ? AND job_state = ?
+                          AND result_expires_at > ?
+                    """,
+                    (
+                        cache["tenant_id"],
+                        cache["source_sha256"],
+                        JobState.SUCCEEDED.value,
+                        now,
+                    ),
+                ).fetchone()[0]
+                if active_result is not None:
+                    connection.execute(
+                        """
+                        UPDATE parse_cache SET expires_at = ?, last_accessed_at = ?
+                        WHERE tenant_id = ? AND source_sha256 = ?
+                        """,
+                        (active_result, now, cache["tenant_id"], cache["source_sha256"]),
+                    )
+                    continue
+                connection.execute(
+                    "DELETE FROM parse_cache WHERE tenant_id = ? AND source_sha256 = ?",
+                    (cache["tenant_id"], cache["source_sha256"]),
+                )
+                removed.append(
+                    {"tenant_id": cache["tenant_id"], "source_sha256": cache["source_sha256"]}
+                )
+            connection.commit()
+            return removed
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def purge_expired_tombstones(self, now: int | None = None) -> list[str]:
+        """删除不再被缓存记录引用的终态 Job，返回可清理输入与 attempt 目录的 ID。"""
+
+        now = _current_timestamp() if now is None else now
+        connection = connect_database(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT jobs.job_id FROM jobs
+                LEFT JOIN parse_cache ON parse_cache.owner_job_id = jobs.job_id
+                WHERE jobs.tombstone_expires_at <= ? AND parse_cache.owner_job_id IS NULL
+                """,
+                (now,),
+            ).fetchall()
+            job_ids = [row["job_id"] for row in rows]
+            if job_ids:
+                connection.executemany("DELETE FROM jobs WHERE job_id = ?", ((job_id,) for job_id in job_ids))
+            connection.commit()
+            return job_ids
         except Exception:
             connection.rollback()
             raise

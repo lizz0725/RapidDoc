@@ -93,6 +93,33 @@ class ArtifactStore:
                     total += path.stat().st_size
         return total
 
+    def remove_job_artifacts(self, job_id: str) -> None:
+        """删除已从数据库清除的 Job 输入和 attempt 临时目录。"""
+
+        safe_job_id = _safe_component(job_id)
+        self.remove_tree(self.root / "inputs" / safe_job_id)
+        self.remove_tree(self.root / "attempts" / safe_job_id)
+
+    def remove_cache_artifacts(self, tenant_id: str, source_sha256: str) -> None:
+        """删除已从缓存表清除的一份共享 OCR 结果。"""
+
+        cache_directory = self.cache_result_path(tenant_id, source_sha256, "json").parent
+        self.remove_tree(cache_directory)
+
+    def remove_stale_staging(self, older_than: int) -> int:
+        """删除超过保留阈值的上传暂存文件，返回删除数量。"""
+
+        staging_directory = self.root / "staging"
+        if not staging_directory.exists():
+            return 0
+        removed = 0
+        for path in staging_directory.iterdir():
+            if not path.is_file() or path.stat().st_mtime > older_than:
+                continue
+            self.remove_file(path)
+            removed += 1
+        return removed
+
     def remove_file(self, path: Path) -> None:
         self._assert_within_root(path)
         path.unlink(missing_ok=True)
