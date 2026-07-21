@@ -127,6 +127,7 @@ rapid_doc = [
     "resources/*.txt",
     "resources/*.html",
     "resources/fasttext-langdetect/*",
+    "jobs/*.sql",
     "model/magika/config/*.json",
     "model/magika/models/**/*.json",
     "model/magika/models/**/*.onnx",

@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DOCKER_DIR = REPOSITORY_ROOT / "docker"
-if str(DOCKER_DIR) not in sys.path:
-    sys.path.insert(0, str(DOCKER_DIR))
-
-from job_artifacts import ArtifactStore, tenant_storage_key  # noqa: E402
-from job_config import JobSettings  # noqa: E402
-from job_database import connect_database, initialize_database  # noqa: E402
-from job_limits import JobAdmissionLimits  # noqa: E402
-from job_types import generate_ulid  # noqa: E402
+from rapid_doc.jobs.job_artifacts import ArtifactStore, tenant_storage_key
+from rapid_doc.jobs.job_config import JobSettings
+from rapid_doc.jobs.job_database import connect_database, initialize_database
+from rapid_doc.jobs.job_limits import JobAdmissionLimits
+from rapid_doc.jobs.job_types import generate_ulid
 
 
 class JobFoundationTest(unittest.TestCase):

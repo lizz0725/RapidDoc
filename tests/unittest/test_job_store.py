@@ -3,25 +3,18 @@
 from __future__ import annotations
 
 import concurrent.futures
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DOCKER_DIR = REPOSITORY_ROOT / "docker"
-if str(DOCKER_DIR) not in sys.path:
-    sys.path.insert(0, str(DOCKER_DIR))
-
-from job_config import JobSettings  # noqa: E402
-from job_database import connect_database, initialize_database  # noqa: E402
-from job_store import (  # noqa: E402
+from rapid_doc.jobs.job_config import JobSettings
+from rapid_doc.jobs.job_database import connect_database, initialize_database
+from rapid_doc.jobs.job_store import (
     IdempotencyConflictError,
     JobStore,
     JobSubmission,
 )
-from job_types import CacheRole, CacheState, JobState, ResultSource  # noqa: E402
+from rapid_doc.jobs.job_types import CacheRole, CacheState, JobState, ResultSource
 
 
 class JobStoreTest(unittest.TestCase):
