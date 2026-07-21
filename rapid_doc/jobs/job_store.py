@@ -358,6 +358,161 @@ class JobStore:
         finally:
             connection.close()
 
+    def begin_publishing(self, job_id: str, attempt_token: str) -> bool:
+        """确认本次 attempt 仍持有任务后，切换到文件发布阶段。"""
+
+        return self.transition_job(
+            job_id,
+            JobState.RUNNING,
+            JobState.PUBLISHING,
+            attempt_token=attempt_token,
+        )
+
+    def complete_publishing(
+        self,
+        job_id: str,
+        attempt_token: str,
+        result_path: str,
+        result_bytes: int,
+        now: int | None = None,
+    ) -> bool:
+        """发布共享结果，并在同一事务中完成 owner 与所有 follower。"""
+
+        now = _current_timestamp() if now is None else now
+        connection = connect_database(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            owner = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE job_id = ? AND job_state = ? AND cache_role = ?
+                      AND active_attempt_token = ?
+                """,
+                (job_id, JobState.PUBLISHING.value, CacheRole.OWNER.value, attempt_token),
+            ).fetchone()
+            if owner is None:
+                connection.commit()
+                return False
+            cache_updated = connection.execute(
+                """
+                UPDATE parse_cache
+                SET cache_state = ?, result_path = ?, result_bytes = ?,
+                    last_accessed_at = ?, expires_at = ?
+                WHERE tenant_id = ? AND source_sha256 = ? AND owner_job_id = ?
+                      AND cache_state = ?
+                """,
+                (
+                    CacheState.READY.value,
+                    result_path,
+                    result_bytes,
+                    now,
+                    now + self.settings.cache_ttl_seconds,
+                    owner["tenant_id"],
+                    owner["source_sha256"],
+                    job_id,
+                    CacheState.PROCESSING.value,
+                ),
+            )
+            if cache_updated.rowcount != 1:
+                connection.commit()
+                return False
+            result_expires_at = now + self.settings.result_ttl_seconds
+            connection.execute(
+                """
+                UPDATE jobs
+                SET job_state = ?, result_path = ?, result_expires_at = ?, finished_at = ?,
+                    active_attempt_token = NULL, lease_expires_at = NULL,
+                    error_code = NULL, error_message = NULL
+                WHERE job_id = ? AND job_state = ? AND active_attempt_token = ?
+                """,
+                (
+                    JobState.SUCCEEDED.value,
+                    result_path,
+                    result_expires_at,
+                    now,
+                    job_id,
+                    JobState.PUBLISHING.value,
+                    attempt_token,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE jobs
+                SET job_state = ?, result_path = ?, result_expires_at = ?, finished_at = ?
+                WHERE tenant_id = ? AND source_sha256 = ? AND job_state = ?
+                      AND cache_role = ?
+                """,
+                (
+                    JobState.SUCCEEDED.value,
+                    result_path,
+                    result_expires_at,
+                    now,
+                    owner["tenant_id"],
+                    owner["source_sha256"],
+                    JobState.WAITING_FOR_RESULT.value,
+                    CacheRole.FOLLOWER.value,
+                ),
+            )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def fail_owner_job(
+        self,
+        job_id: str,
+        attempt_token: str,
+        error_code: str,
+        error_message: str,
+        now: int | None = None,
+    ) -> bool:
+        """将解析失败的 owner 收敛为终态，并提升一个等待者或清理 processing 缓存。"""
+
+        now = _current_timestamp() if now is None else now
+        connection = connect_database(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE job_id = ? AND job_state = ? AND cache_role = ?
+                      AND active_attempt_token = ?
+                """,
+                (job_id, JobState.RUNNING.value, CacheRole.OWNER.value, attempt_token),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return False
+            owner = dict(row)
+            connection.execute(
+                """
+                UPDATE jobs
+                SET job_state = ?, finished_at = ?, error_code = ?, error_message = ?,
+                    active_attempt_token = NULL, lease_expires_at = NULL
+                WHERE job_id = ? AND job_state = ? AND active_attempt_token = ?
+                """,
+                (
+                    JobState.FAILED.value,
+                    now,
+                    error_code,
+                    error_message,
+                    job_id,
+                    JobState.RUNNING.value,
+                    attempt_token,
+                ),
+            )
+            self._promote_follower_or_clear_cache(connection, owner, now)
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def transition_job(
         self,
         job_id: str,
