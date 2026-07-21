@@ -79,9 +79,7 @@ class JobAdmissionService:
         idempotency_key: str | None,
     ) -> JobCreation:
         self.initialize()
-        normalized_tenant_id = _normalize_text(
-            tenant_id, field_name="tenantId", error_code="INVALID_TENANT_ID", required=True
-        )
+        normalized_tenant_id = normalize_tenant_id(tenant_id)
         normalized_business_ref = _normalize_text(
             business_ref,
             field_name="businessRef",
@@ -189,6 +187,16 @@ def _normalize_text(
         return None
     if len(normalized) > 128 or not normalized.isprintable():
         raise JobAdmissionError(422, error_code, f"{field_name} 必须是不超过 128 个字符的可打印文本。")
+    return normalized
+
+
+def normalize_tenant_id(value: str | None) -> str:
+    """统一创建、查询、获取结果和取消接口的租户参数校验。"""
+
+    normalized = _normalize_text(
+        value, field_name="tenantId", error_code="INVALID_TENANT_ID", required=True
+    )
+    assert normalized is not None
     return normalized
 
 

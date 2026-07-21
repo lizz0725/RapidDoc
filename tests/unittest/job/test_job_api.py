@@ -18,7 +18,7 @@ from rapid_doc.jobs.job_admission import JobAdmissionService
 from rapid_doc.jobs.job_config import JobSettings
 from rapid_doc.jobs.job_database import connect_database
 from rapid_doc.jobs.job_limits import JobAdmissionLimits
-from rapid_doc.jobs.job_types import CacheState
+from rapid_doc.jobs.job_types import CacheRole, CacheState, JobState
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -73,6 +73,42 @@ class JobApiTest(unittest.TestCase):
             connection.close()
         self.assertEqual(job_count, 0)
         self.assertFalse(list((self.settings.data_dir / "inputs").rglob("*")))
+
+    def publish_success_result(self, job_id: str, markdown: str) -> None:
+        job = self.service.store.get_job("finance", job_id)
+        self.assertIsNotNone(job)
+        assert job is not None
+        result_path = self.service.artifacts.cache_result_path(
+            "finance", job["source_sha256"], "json"
+        )
+        self.service.artifacts.write_bytes_atomic(
+            result_path,
+            json.dumps(
+                {"markdown": markdown, "metadata": {"engine": "fixture"}},
+                ensure_ascii=False,
+            ).encode("utf-8"),
+        )
+        relative_path = str(result_path.relative_to(self.settings.data_dir))
+        connection = connect_database(self.settings.database_path)
+        try:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET job_state = ?, result_path = ?, finished_at = ?, result_expires_at = ?
+                WHERE job_id = ?
+                """,
+                (JobState.SUCCEEDED.value, relative_path, 1_700_000_010, 1_700_600_000, job_id),
+            )
+            connection.execute(
+                """
+                UPDATE parse_cache
+                SET cache_state = ?, result_path = ?
+                WHERE tenant_id = ? AND source_sha256 = ?
+                """,
+                (CacheState.READY.value, relative_path, "finance", job["source_sha256"]),
+            )
+        finally:
+            connection.close()
 
     def test_create_pdf_job_persists_input_and_page_warning(self) -> None:
         source = self.pdf_bytes(page_count=2)
@@ -196,6 +232,117 @@ class JobApiTest(unittest.TestCase):
         self.assertEqual(hit.status_code, 202)
         self.assertEqual(hit.json()["jobState"], "succeeded")
         self.assertEqual(hit.json()["cache"], {"role": "hit", "resultSource": "cache"})
+
+    def test_status_reports_dynamic_queue_observation_and_hides_other_tenants(self) -> None:
+        first = self.client.post(
+            "/jobs",
+            files={"file": ("first.pdf", self.pdf_bytes(page_count=1), "application/pdf")},
+            data={"tenantId": "finance"},
+        )
+        second = self.client.post(
+            "/jobs",
+            files={"file": ("second.pdf", self.pdf_bytes(page_count=2), "application/pdf")},
+            data={"tenantId": "finance"},
+        )
+
+        response = self.client.get(
+            f"/jobs/{second.json()['jobId']}", headers={"X-Tenant-Id": "finance"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["jobState"], JobState.QUEUED.value)
+        self.assertEqual(payload["queueSeq"], 2)
+        self.assertEqual(payload["queuePosition"], 2)
+        self.assertEqual(payload["aheadQueuedCount"], 1)
+        self.assertEqual(payload["runningJobCount"], 0)
+        self.assertEqual(payload["workerCapacity"], 1)
+        self.assertEqual(payload["sourcePageCount"], 2)
+        self.assertEqual(payload["processedPageCount"], 1)
+        self.assertTrue(payload["truncated"])
+        self.assertEqual(payload["warnings"][0]["code"], "PDF_PAGE_LIMIT_TRUNCATED")
+        self.assertEqual(payload["error"], None)
+        denied = self.client.get(
+            f"/jobs/{first.json()['jobId']}", headers={"X-Tenant-Id": "other"}
+        )
+        self.assertEqual(denied.status_code, 404)
+        self.assertEqual(denied.json()["error"]["code"], "JOB_NOT_FOUND")
+
+    def test_result_endpoint_reports_pending_success_and_expiry(self) -> None:
+        created = self.client.post(
+            "/jobs",
+            files={"file": ("contract.pdf", self.pdf_bytes(page_count=2), "application/pdf")},
+            data={"tenantId": "finance"},
+        )
+        job_id = created.json()["jobId"]
+        pending = self.client.get(f"/jobs/{job_id}/result", headers={"X-Tenant-Id": "finance"})
+        self.assertEqual(pending.status_code, 202)
+        self.assertEqual(
+            pending.json(),
+            {"jobId": job_id, "jobState": JobState.QUEUED.value, "result": None},
+        )
+
+        self.publish_success_result(job_id, "# 合同\n\n正文")
+        succeeded = self.client.get(
+            f"/jobs/{job_id}/result", headers={"X-Tenant-Id": "finance"}
+        )
+        self.assertEqual(succeeded.status_code, 200)
+        self.assertEqual(succeeded.json()["result"]["markdown"], "# 合同\n\n正文")
+        self.assertEqual(succeeded.json()["result"]["metadata"]["engine"], "fixture")
+        self.assertEqual(succeeded.json()["result"]["metadata"]["resultSource"], "ocr")
+        self.assertEqual(succeeded.json()["result"]["metadata"]["sourcePageCount"], 2)
+        self.assertTrue(succeeded.json()["result"]["metadata"]["truncated"])
+
+        connection = connect_database(self.settings.database_path)
+        try:
+            connection.execute(
+                "UPDATE jobs SET job_state = ? WHERE job_id = ?",
+                (JobState.RESULT_EXPIRED.value, job_id),
+            )
+        finally:
+            connection.close()
+        expired = self.client.get(f"/jobs/{job_id}/result", headers={"X-Tenant-Id": "finance"})
+        self.assertEqual(expired.status_code, 410)
+        self.assertEqual(expired.json()["error"]["code"], "RESULT_EXPIRED")
+
+    def test_cancel_owner_promotes_follower_and_running_job_cannot_be_cancelled(self) -> None:
+        source = self.pdf_bytes()
+        owner = self.client.post(
+            "/jobs",
+            files={"file": ("contract.pdf", source, "application/pdf")},
+            data={"tenantId": "finance"},
+        )
+        follower = self.client.post(
+            "/jobs",
+            files={"file": ("duplicate.pdf", source, "application/pdf")},
+            data={"tenantId": "finance"},
+        )
+
+        cancelled = self.client.post(
+            f"/jobs/{owner.json()['jobId']}/cancel", headers={"X-Tenant-Id": "finance"}
+        )
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.json()["jobState"], JobState.CANCELLED.value)
+        follower_status = self.client.get(
+            f"/jobs/{follower.json()['jobId']}", headers={"X-Tenant-Id": "finance"}
+        )
+        self.assertEqual(follower_status.status_code, 200)
+        self.assertEqual(follower_status.json()["jobState"], JobState.QUEUED.value)
+        self.assertEqual(follower_status.json()["cache"]["role"], CacheRole.OWNER.value)
+        self.assertEqual(follower_status.json()["queuePosition"], 1)
+        unavailable = self.client.get(
+            f"/jobs/{owner.json()['jobId']}/result", headers={"X-Tenant-Id": "finance"}
+        )
+        self.assertEqual(unavailable.status_code, 409)
+
+        self.assertIsNotNone(
+            self.service.store.claim_next_job(attempt_token="fixture-attempt")
+        )
+        cannot_cancel = self.client.post(
+            f"/jobs/{follower.json()['jobId']}/cancel", headers={"X-Tenant-Id": "finance"}
+        )
+        self.assertEqual(cannot_cancel.status_code, 409)
+        self.assertEqual(cannot_cancel.json()["error"]["code"], "JOB_CANNOT_BE_CANCELLED")
 
     def test_create_job_rejects_oversized_file_before_enqueue(self) -> None:
         oversized = b"x" * (self.settings.max_file_size_bytes + 1)

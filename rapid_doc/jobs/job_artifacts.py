@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -49,6 +50,18 @@ class ArtifactStore:
             / f"result.{suffix}"
         )
 
+    def read_result_json(self, relative_path: str) -> dict[str, object]:
+        """读取 Worker 发布的结构化结果，并拒绝越出任务目录的路径。"""
+
+        path = self._path_from_relative(relative_path)
+        try:
+            content = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("result artifact is not valid JSON") from exc
+        if not isinstance(content, dict) or not isinstance(content.get("markdown"), str):
+            raise ValueError("result artifact does not contain markdown")
+        return content
+
     def write_bytes_atomic(self, destination: Path, content: bytes) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(prefix=".pending-", dir=destination.parent)
@@ -91,6 +104,14 @@ class ArtifactStore:
     def _assert_within_root(self, path: Path) -> None:
         if self.root not in (path, *path.parents):
             raise ValueError("refusing to delete a path outside the artifact root")
+
+    def _path_from_relative(self, relative_path: str) -> Path:
+        relative = PurePath(relative_path)
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise ValueError("result path is unsafe")
+        path = self.root.joinpath(*relative.parts)
+        self._assert_within_root(path)
+        return path
 
 
 def tenant_storage_key(tenant_id: str) -> str:

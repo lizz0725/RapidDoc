@@ -111,6 +111,55 @@ class JobStoreTest(unittest.TestCase):
                 now=self.now + 2,
             )
 
+    def test_cancelling_owner_promotes_earliest_follower(self) -> None:
+        owner = self.store.create_or_reuse_job(self.submission(digest="g" * 64), now=self.now)
+        first_follower = self.store.create_or_reuse_job(
+            self.submission(digest="g" * 64, fingerprint="request-v2"), now=self.now + 1
+        )
+        second_follower = self.store.create_or_reuse_job(
+            self.submission(digest="g" * 64, fingerprint="request-v3"), now=self.now + 2
+        )
+
+        cancellation = self.store.cancel_job("finance", owner.job["job_id"], now=self.now + 3)
+
+        self.assertTrue(cancellation.cancelled)
+        self.assertEqual(cancellation.job["job_state"], JobState.CANCELLED.value)
+        promoted = self.store.get_job("finance", first_follower.job["job_id"])
+        waiting = self.store.get_job("finance", second_follower.job["job_id"])
+        self.assertIsNotNone(promoted)
+        self.assertIsNotNone(waiting)
+        assert promoted is not None
+        assert waiting is not None
+        self.assertEqual(promoted["job_state"], JobState.QUEUED.value)
+        self.assertEqual(promoted["cache_role"], CacheRole.OWNER.value)
+        self.assertEqual(promoted["queue_seq"], 2)
+        self.assertEqual(waiting["job_state"], JobState.WAITING_FOR_RESULT.value)
+        connection = connect_database(self.settings.database_path)
+        try:
+            cache = connection.execute(
+                "SELECT owner_job_id FROM parse_cache WHERE tenant_id = ? AND source_sha256 = ?",
+                ("finance", "g" * 64),
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual(cache["owner_job_id"], first_follower.job["job_id"])
+
+    def test_cancelling_last_owner_clears_processing_cache(self) -> None:
+        owner = self.store.create_or_reuse_job(self.submission(digest="h" * 64), now=self.now)
+
+        cancellation = self.store.cancel_job("finance", owner.job["job_id"], now=self.now + 1)
+
+        self.assertTrue(cancellation.cancelled)
+        connection = connect_database(self.settings.database_path)
+        try:
+            cache = connection.execute(
+                "SELECT 1 FROM parse_cache WHERE tenant_id = ? AND source_sha256 = ?",
+                ("finance", "h" * 64),
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertIsNone(cache)
+
     def test_concurrent_workers_claim_distinct_jobs_in_fifo_order(self) -> None:
         first = self.store.create_or_reuse_job(
             self.submission(digest="e" * 64), now=self.now
