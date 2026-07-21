@@ -55,6 +55,13 @@ def _read_extensions(environ: Mapping[str, str]) -> frozenset[str]:
     return extensions
 
 
+def _read_optional_secret(environ: Mapping[str, str], name: str) -> str | None:
+    value = environ.get(name)
+    if value is None or not value.strip():
+        return None
+    return value.strip()
+
+
 @dataclass(frozen=True)
 class JobSettings:
     async_enabled: bool = True
@@ -74,6 +81,7 @@ class JobSettings:
     sweeper_interval_seconds: int = 60
     callback_connect_timeout_seconds: int = 5
     callback_read_timeout_seconds: int = 30
+    callback_signing_secret: str | None = None
     data_dir: Path = DEFAULT_JOB_DATA_DIR
 
     @classmethod
@@ -108,6 +116,9 @@ class JobSettings:
             ),
             callback_read_timeout_seconds=_read_positive_int(
                 environ, "RAPID_DOC_CALLBACK_READ_TIMEOUT_SECONDS", 30
+            ),
+            callback_signing_secret=_read_optional_secret(
+                environ, "RAPID_DOC_CALLBACK_SIGNING_SECRET"
             ),
         )
         settings.validate()

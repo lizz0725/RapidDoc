@@ -11,13 +11,14 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .job_config import JobSettings
 from .job_database import connect_database
 from .job_limits import JobAdmissionLimits
-from .job_types import CacheRole, CacheState, JobState, generate_ulid
+from .job_types import CallbackState, CacheRole, CacheState, JobState, generate_ulid
 
 
 class IdempotencyConflictError(Exception):
@@ -71,6 +72,15 @@ _MUTABLE_JOB_COLUMNS = frozenset(
         "error_code",
         "error_message",
         "warnings_json",
+    }
+)
+
+_CALLBACK_TERMINAL_STATES = frozenset(
+    {
+        JobState.SUCCEEDED.value,
+        JobState.FAILED.value,
+        JobState.CANCELLED.value,
+        JobState.EXPIRED.value,
     }
 )
 
@@ -154,6 +164,7 @@ class JobStore:
                         submission.source_sha256,
                     ),
                 )
+                self._enqueue_terminal_callback(connection, job_id, now)
             elif cache_row is not None:
                 job = self._insert_job(
                     connection,
@@ -288,6 +299,8 @@ class JobStore:
 
             if job["job_state"] == JobState.QUEUED.value and job["cache_role"] == CacheRole.OWNER.value:
                 self._promote_follower_or_clear_cache(connection, job, now)
+
+            self._enqueue_terminal_callback(connection, job_id, now)
 
             cancelled = self._select_job(connection, tenant_id, job_id)
             connection.commit()
@@ -447,6 +460,7 @@ class JobStore:
                     attempt_token,
                 ),
             )
+            self._enqueue_terminal_callback(connection, job_id, now)
             connection.execute(
                 """
                 UPDATE jobs
@@ -465,6 +479,21 @@ class JobStore:
                     CacheRole.FOLLOWER.value,
                 ),
             )
+            follower_rows = connection.execute(
+                """
+                SELECT job_id FROM jobs
+                WHERE tenant_id = ? AND source_sha256 = ? AND job_state = ?
+                      AND cache_role = ?
+                """,
+                (
+                    owner["tenant_id"],
+                    owner["source_sha256"],
+                    JobState.SUCCEEDED.value,
+                    CacheRole.FOLLOWER.value,
+                ),
+            ).fetchall()
+            for follower in follower_rows:
+                self._enqueue_terminal_callback(connection, follower["job_id"], now)
             connection.commit()
             return True
         except Exception:
@@ -518,6 +547,7 @@ class JobStore:
                     attempt_token,
                 ),
             )
+            self._enqueue_terminal_callback(connection, job_id, now)
             self._promote_follower_or_clear_cache(connection, owner, now)
             connection.commit()
             return True
@@ -565,6 +595,7 @@ class JobStore:
                         ),
                     )
                     if updated.rowcount == 1:
+                        self._enqueue_terminal_callback(connection, job["job_id"], now)
                         self._promote_follower_or_clear_cache(connection, job, now)
                     continue
                 connection.execute(
@@ -628,6 +659,7 @@ class JobStore:
                     ),
                 )
                 if updated.rowcount == 1:
+                    self._enqueue_terminal_callback(connection, job["job_id"], now)
                     self._promote_follower_or_clear_cache(connection, job, now)
             connection.commit()
             return len(rows)
@@ -699,6 +731,7 @@ class JobStore:
                     ),
                 )
                 if updated.rowcount == 1:
+                    self._enqueue_terminal_callback(connection, job_id, now)
                     self._promote_follower_or_clear_cache(connection, job, now)
             else:
                 connection.execute(
@@ -760,6 +793,7 @@ class JobStore:
                         CacheRole.FOLLOWER.value,
                     ),
                 )
+                self._enqueue_terminal_callback(connection, row["job_id"], now)
 
             owner_rows = connection.execute(
                 """
@@ -788,6 +822,7 @@ class JobStore:
                         JobState.QUEUED.value,
                     ),
                 )
+                self._enqueue_terminal_callback(connection, job["job_id"], now)
                 self._promote_follower_or_clear_cache(connection, job, now)
             connection.commit()
             return len(follower_rows) + len(owner_rows)
@@ -899,6 +934,86 @@ class JobStore:
         finally:
             connection.close()
 
+    def claim_next_callback(self, now: int | None = None) -> dict[str, Any] | None:
+        """领取一条待投递回调，并在发起网络请求前永久标记为 dispatching。"""
+
+        now = _current_timestamp() if now is None else now
+        connection = connect_database(self.database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM callback_outbox
+                WHERE callback_state = ?
+                ORDER BY delivery_id ASC
+                LIMIT 1
+                """,
+                (CallbackState.PENDING.value,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            updated = connection.execute(
+                """
+                UPDATE callback_outbox
+                SET callback_state = ?, attempted_at = ?
+                WHERE delivery_id = ? AND callback_state = ?
+                """,
+                (
+                    CallbackState.DISPATCHING.value,
+                    now,
+                    row["delivery_id"],
+                    CallbackState.PENDING.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                connection.commit()
+                return None
+            claimed = connection.execute(
+                "SELECT * FROM callback_outbox WHERE delivery_id = ?",
+                (row["delivery_id"],),
+            ).fetchone()
+            connection.commit()
+            return dict(claimed)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def complete_callback(
+        self,
+        delivery_id: str,
+        *,
+        delivered: bool,
+        http_status: int | None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        """记录唯一一次回调的最终结果；dispatching 记录不会被重复投递。"""
+
+        state = CallbackState.DELIVERED if delivered else CallbackState.FAILED
+        connection = connect_database(self.database_path)
+        try:
+            updated = connection.execute(
+                """
+                UPDATE callback_outbox
+                SET callback_state = ?, http_status = ?, error_code = ?, error_message = ?
+                WHERE delivery_id = ? AND callback_state = ?
+                """,
+                (
+                    state.value,
+                    http_status,
+                    error_code,
+                    error_message,
+                    delivery_id,
+                    CallbackState.DISPATCHING.value,
+                ),
+            )
+            return updated.rowcount == 1
+        finally:
+            connection.close()
+
     def transition_job(
         self,
         job_id: str,
@@ -1006,6 +1121,50 @@ class JobStore:
         )
 
     @staticmethod
+    def _enqueue_terminal_callback(
+        connection: sqlite3.Connection, job_id: str, now: int
+    ) -> None:
+        """在 Job 终态所在的同一事务内创建唯一 outbox 记录。"""
+
+        job = connection.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        if (
+            job is None
+            or not job["callback_url"]
+            or job["job_state"] not in _CALLBACK_TERMINAL_STATES
+        ):
+            return
+        delivery_id = generate_ulid(timestamp_ms=now * 1000)
+        payload = {
+            "deliveryId": delivery_id,
+            "eventType": "job.terminal",
+            "jobId": job["job_id"],
+            "jobState": job["job_state"],
+            "submittedAt": _timestamp_as_iso(job["submitted_at"]),
+            "startedAt": _timestamp_as_iso(job["started_at"]),
+            "finishedAt": _timestamp_as_iso(job["finished_at"]),
+            "resultUrl": f"/jobs/{job['job_id']}/result",
+            "error": (
+                {"code": job["error_code"], "message": job["error_message"] or ""}
+                if job["error_code"]
+                else None
+            ),
+        }
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO callback_outbox (
+                delivery_id, job_id, callback_url_snapshot, payload_json, callback_state
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                delivery_id,
+                job_id,
+                job["callback_url"],
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                CallbackState.PENDING.value,
+            ),
+        )
+
+    @staticmethod
     def _select_job(
         connection: sqlite3.Connection, tenant_id: str, job_id: str
     ) -> sqlite3.Row | None:
@@ -1090,3 +1249,9 @@ def hash_idempotency_key(value: str | None) -> str | None:
 
 def _current_timestamp() -> int:
     return int(time.time())
+
+
+def _timestamp_as_iso(timestamp: int | None) -> str | None:
+    if timestamp is None:
+        return None
+    return datetime.fromtimestamp(timestamp, UTC).isoformat().replace("+00:00", "Z")
