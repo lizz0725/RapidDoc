@@ -18,6 +18,12 @@ from rapid_doc.jobs.job_admission import JobAdmissionService
 from rapid_doc.jobs.job_config import JobSettings
 from rapid_doc.jobs.job_database import connect_database
 from rapid_doc.jobs.job_limits import JobAdmissionLimits
+from rapid_doc.jobs.job_runtime import (
+    CALLBACK_DISPATCHER_COMPONENT,
+    MAINTENANCE_COMPONENT,
+    OCR_WORKER_COMPONENT,
+    JobRuntime,
+)
 from rapid_doc.jobs.job_types import CacheRole, CacheState, JobState
 
 
@@ -267,6 +273,53 @@ class JobApiTest(unittest.TestCase):
         )
         self.assertEqual(denied.status_code, 404)
         self.assertEqual(denied.json()["error"]["code"], "JOB_NOT_FOUND")
+
+    def test_operations_queue_returns_only_fifo_owners_and_ready_requires_components(self) -> None:
+        first = self.client.post(
+            "/jobs",
+            files={"file": ("first.pdf", self.pdf_bytes(page_count=1), "application/pdf")},
+            data={"tenantId": "finance"},
+        )
+        second = self.client.post(
+            "/jobs",
+            files={"file": ("second.pdf", self.pdf_bytes(page_count=2), "application/pdf")},
+            data={"tenantId": "legal"},
+        )
+        self.client.post(
+            "/jobs",
+            files={"file": ("duplicate.pdf", self.pdf_bytes(page_count=1), "application/pdf")},
+            data={"tenantId": "finance"},
+        )
+
+        queue = self.client.get("/ops/jobs/queue")
+
+        self.assertEqual(queue.status_code, 200)
+        payload = queue.json()
+        self.assertEqual(payload["queuedCount"], 2)
+        self.assertEqual(payload["runningJobCount"], 0)
+        self.assertEqual(payload["workerCapacity"], 1)
+        self.assertEqual(
+            [item["jobId"] for item in payload["items"]],
+            [first.json()["jobId"], second.json()["jobId"]],
+        )
+        self.assertEqual([item["queuePosition"] for item in payload["items"]], [1, 2])
+        self.assertEqual(payload["items"][0]["tenantId"], "finance")
+
+        self.assertEqual(self.client.get("/health/live").json()["status"], "alive")
+        self.assertEqual(self.client.get("/health/ready").status_code, 503)
+
+        runtime = JobRuntime(self.settings)
+        for component_type, component_id in (
+            (OCR_WORKER_COMPONENT, "ocr-worker-1"),
+            (MAINTENANCE_COMPONENT, "maintenance-main"),
+            (CALLBACK_DISPATCHER_COMPONENT, "callback-dispatcher-main"),
+        ):
+            runtime.record_heartbeat(component_type, component_id)
+
+        ready = self.client.get("/health/ready")
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(ready.json()["status"], "ready")
+        self.assertTrue(ready.json()["checks"]["components"][OCR_WORKER_COMPONENT]["ready"])
 
     def test_result_endpoint_reports_pending_success_and_expiry(self) -> None:
         created = self.client.post(

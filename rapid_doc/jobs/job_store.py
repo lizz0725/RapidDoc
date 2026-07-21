@@ -258,6 +258,40 @@ class JobStore:
         finally:
             connection.close()
 
+    def get_queue_snapshot(self) -> dict[str, Any]:
+        """返回运维接口所需的真实 OCR FIFO 快照，不混入 follower 或终态任务。"""
+
+        connection = connect_database(self.database_path)
+        try:
+            rows = connection.execute(
+                """
+                SELECT job_id, tenant_id, source_filename, submitted_at
+                FROM jobs
+                WHERE job_state = ? AND cache_role = ?
+                ORDER BY queue_seq ASC
+                """,
+                (JobState.QUEUED.value, CacheRole.OWNER.value),
+            ).fetchall()
+            running_job_count = connection.execute(
+                "SELECT COUNT(*) FROM jobs WHERE job_state = ?",
+                (JobState.RUNNING.value,),
+            ).fetchone()[0]
+            return {
+                "items": [
+                    {
+                        "queue_position": position,
+                        "job_id": row["job_id"],
+                        "tenant_id": row["tenant_id"],
+                        "source_filename": row["source_filename"],
+                        "submitted_at": row["submitted_at"],
+                    }
+                    for position, row in enumerate(rows, start=1)
+                ],
+                "running_job_count": running_job_count,
+            }
+        finally:
+            connection.close()
+
     def cancel_job(
         self, tenant_id: str, job_id: str, now: int | None = None
     ) -> JobCancellation:

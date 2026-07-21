@@ -37,6 +37,14 @@ class DockerApiContractTest(unittest.TestCase):
         self.assertEqual(response.json()["api"], "RapidDoc Web API")
         self.assertEqual(response.json()["compatible"], "Official RapidDoc API")
 
+    def test_cpu_start_script_supervises_async_job_processes(self) -> None:
+        script = (DOCKER_DIR / "start_api_gradio_cpu_slim.sh").read_text(encoding="utf-8")
+
+        self.assertIn("rapid_doc.jobs.job_worker", script)
+        self.assertIn("rapid_doc.jobs.job_maintenance", script)
+        self.assertIn("rapid_doc.jobs.job_callback", script)
+        self.assertIn("restart-workers.request", script)
+
     def test_file_parse_returns_markdown_without_loading_models(self) -> None:
         captured: dict[str, object] = {}
 

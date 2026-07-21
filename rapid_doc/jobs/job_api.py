@@ -151,6 +151,33 @@ def install_job_api(app: FastAPI) -> None:
             }
         )
 
+    @router.get("/ops/jobs/queue", summary="查看真实 OCR 排队任务")
+    def get_operations_queue(request: Request) -> JSONResponse:
+        """仅面向受控内网运维网关，不以 tenantId 限制查询范围。"""
+
+        service = _job_service(request.app)
+        service.initialize()
+        snapshot = service.store.get_queue_snapshot()
+        items = snapshot["items"]
+        return JSONResponse(
+            content={
+                "generatedAt": _timestamp_as_iso(int(datetime.now(UTC).timestamp())),
+                "queuedCount": len(items),
+                "runningJobCount": snapshot["running_job_count"],
+                "workerCapacity": service.settings.worker_processes,
+                "items": [
+                    {
+                        "queuePosition": item["queue_position"],
+                        "jobId": item["job_id"],
+                        "tenantId": item["tenant_id"],
+                        "sourceFilename": item["source_filename"],
+                        "submittedAt": _timestamp_as_iso(item["submitted_at"]),
+                    }
+                    for item in items
+                ],
+            }
+        )
+
     app.include_router(router)
 
 

@@ -60,6 +60,9 @@ class JobMaintenance:
         self.initialize()
         publishing_recovered = self._recover_publishing_jobs(now)
         run_timeouts = self.store.fail_overlong_running_jobs(now)
+        if run_timeouts:
+            self.artifacts.request_worker_restart("检测到 OCR 最大执行时长超限。")
+            logger.warning("检测到 {} 个 OCR 超时任务，已请求启动监督器重启 Worker。", run_timeouts)
         expired_leases = self.store.recover_expired_running_jobs(now)
         report = MaintenanceReport(
             publishing_recovered=publishing_recovered,
@@ -113,15 +116,22 @@ class JobMaintenance:
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         """以不同间隔运行 Watchdog 和 Sweeper，供容器启动脚本拉起。"""
 
+        from .job_runtime import MAINTENANCE_COMPONENT, ServiceHeartbeat
+
         stop_event = stop_event or threading.Event()
-        next_sweeper_at = 0.0
-        while not stop_event.is_set():
-            current = time.monotonic()
-            self.run_watchdog_once()
-            if current >= next_sweeper_at:
-                self.run_sweeper_once()
-                next_sweeper_at = current + self.settings.sweeper_interval_seconds
-            stop_event.wait(self.settings.watchdog_interval_seconds)
+        heartbeat = ServiceHeartbeat(self.settings, MAINTENANCE_COMPONENT)
+        heartbeat.start()
+        try:
+            next_sweeper_at = 0.0
+            while not stop_event.is_set():
+                current = time.monotonic()
+                self.run_watchdog_once()
+                if current >= next_sweeper_at:
+                    self.run_sweeper_once()
+                    next_sweeper_at = current + self.settings.sweeper_interval_seconds
+                stop_event.wait(self.settings.watchdog_interval_seconds)
+        finally:
+            heartbeat.stop()
 
     def _recover_publishing_jobs(self, now: int) -> int:
         recovered = 0

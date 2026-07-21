@@ -26,8 +26,14 @@ class JobFoundationTest(unittest.TestCase):
         self.assertEqual(settings.worker_processes, 1)
         self.assertEqual(settings.max_file_size_bytes, 100 * 1024 * 1024)
         self.assertEqual(settings.queue_expire_seconds, 43_200 * 60)
+        self.assertEqual(settings.background_heartbeat_fresh_seconds, 90)
         self.assertIn("xlsx", settings.allowed_extensions)
         self.assertEqual(JobAdmissionLimits.MAX_QUEUED_JOBS, 100)
+
+        custom_directory = JobSettings.from_env(
+            {"RAPID_DOC_JOB_DATA_DIR": "/data/rapid-doc/jobs"}
+        )
+        self.assertEqual(custom_directory.data_dir, Path("/data/rapid-doc/jobs"))
 
     def test_settings_reject_incompatible_timing_configuration(self) -> None:
         with self.assertRaisesRegex(ValueError, "CACHE_TTL"):

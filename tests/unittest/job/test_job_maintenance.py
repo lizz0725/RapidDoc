@@ -93,6 +93,12 @@ class JobMaintenanceTest(unittest.TestCase):
         self.assertEqual(failed["error_code"], "OCR_RUN_TIMEOUT")
         self.assertEqual(promoted["job_state"], JobState.QUEUED.value)
         self.assertEqual(promoted["cache_role"], CacheRole.OWNER.value)
+        self.assertEqual(
+            (self.settings.data_dir / "control" / "restart-workers.request").read_text(
+                encoding="utf-8"
+            ),
+            "检测到 OCR 最大执行时长超限。",
+        )
 
     def test_publishing_attempt_recovers_from_the_temporary_result_file(self) -> None:
         owner = self.enqueue("c" * 64)

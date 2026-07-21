@@ -21,6 +21,7 @@ class ArtifactStore:
             self.root / "attempts",
             self.root / "cache",
             self.root / "staging",
+            self.root / "control",
         ):
             path.mkdir(parents=True, exist_ok=True)
 
@@ -119,6 +120,12 @@ class ArtifactStore:
             self.remove_file(path)
             removed += 1
         return removed
+
+    def request_worker_restart(self, reason: str) -> None:
+        """通知容器启动监督器重启 OCR Worker，不直接在维护线程中杀进程。"""
+
+        signal_path = self.root / "control" / "restart-workers.request"
+        self.write_bytes_atomic(signal_path, reason.encode("utf-8"))
 
     def remove_file(self, path: Path) -> None:
         self._assert_within_root(path)

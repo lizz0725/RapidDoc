@@ -59,6 +59,6 @@ RUN sed -i 's/\r$//' /app/start_api_gradio_cpu_slim.sh && \
 EXPOSE 8888 7860
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -f http://localhost:${API_PORT}/health || exit 1
+    CMD curl -f http://localhost:${API_PORT}/health/ready || exit 1
 
 CMD ["./start_api_gradio_cpu_slim.sh"]

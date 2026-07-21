@@ -22,6 +22,8 @@ from loguru import logger
 from file_converter import ensure_pdf, OFFICE_EXTENSIONS
 from rapid_doc.cli.common import aio_do_parse, old_office_suffixes, pdf_suffixes, image_suffixes, office_suffixes
 from rapid_doc.jobs.job_api import install_job_api
+from rapid_doc.jobs.job_config import JobSettings
+from rapid_doc.jobs.job_runtime import JobRuntime
 from rapid_doc.utils.empty_office import normalize_empty_office_bytes
 from rapid_doc.utils.office_converter import convert_legacy_office_to_modern
 from rapid_doc.utils.pdf_image_tools import images_bytes_to_pdf_bytes
@@ -45,6 +47,26 @@ async def health_check():
         "api": "RapidDoc Web API",
         "compatible": "Official RapidDoc API"
     }
+
+
+@app.get("/health/live")
+async def live_health_check():
+    """进程存活检查：仅确认 FastAPI 可以响应。"""
+
+    return {"status": "alive", "version": __version__}
+
+
+@app.get("/health/ready")
+async def ready_health_check():
+    """就绪检查：确认任务元数据、数据盘与后台 Job 组件均可用。"""
+
+    service = getattr(app.state, "rapid_doc_job_service", None)
+    settings = service.settings if service is not None else JobSettings.from_env()
+    report = JobRuntime(settings).readiness()
+    return JSONResponse(
+        status_code=200 if report["ready"] else 503,
+        content={"status": "ready" if report["ready"] else "not_ready", **report},
+    )
 
 # 支持的文件扩展名 - 与官方 API 保持一致
 office_extensions = [suffix[1:] for suffix in OFFICE_EXTENSIONS]

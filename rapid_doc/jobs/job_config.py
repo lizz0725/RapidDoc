@@ -120,6 +120,7 @@ class JobSettings:
             callback_signing_secret=_read_optional_secret(
                 environ, "RAPID_DOC_CALLBACK_SIGNING_SECRET"
             ),
+            data_dir=Path(environ.get("RAPID_DOC_JOB_DATA_DIR", str(DEFAULT_JOB_DATA_DIR))),
         )
         settings.validate()
         return settings
@@ -151,6 +152,12 @@ class JobSettings:
     @property
     def tombstone_ttl_seconds(self) -> int:
         return self.tombstone_ttl_minutes * 60
+
+    @property
+    def background_heartbeat_fresh_seconds(self) -> int:
+        """后台进程超过三个心跳周期未上报即视为不健康，最低保留一分钟。"""
+
+        return max(60, self.heartbeat_seconds * 3)
 
     def validate(self) -> None:
         if self.cache_ttl_minutes < self.result_ttl_minutes:

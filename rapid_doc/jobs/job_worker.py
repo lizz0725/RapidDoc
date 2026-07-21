@@ -110,10 +110,17 @@ class JobWorker:
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         """供容器启动脚本使用的进程主循环。"""
 
+        from .job_runtime import OCR_WORKER_COMPONENT, ServiceHeartbeat
+
         stop_event = stop_event or threading.Event()
-        while not stop_event.is_set():
-            if not self.run_once():
-                stop_event.wait(self.IDLE_WAIT_SECONDS)
+        heartbeat = ServiceHeartbeat(self.settings, OCR_WORKER_COMPONENT)
+        heartbeat.start()
+        try:
+            while not stop_event.is_set():
+                if not self.run_once():
+                    stop_event.wait(self.IDLE_WAIT_SECONDS)
+        finally:
+            heartbeat.stop()
 
     def _fail_running_job(
         self, job: dict[str, Any], attempt_token: str, error_code: str, error_message: str

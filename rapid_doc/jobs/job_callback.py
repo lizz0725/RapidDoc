@@ -121,10 +121,17 @@ class CallbackDispatcher:
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         """供容器启动脚本使用的 dispatcher 主循环。"""
 
+        from .job_runtime import CALLBACK_DISPATCHER_COMPONENT, ServiceHeartbeat
+
         stop_event = stop_event or threading.Event()
-        while not stop_event.is_set():
-            if not self.run_once():
-                stop_event.wait(self.IDLE_WAIT_SECONDS)
+        heartbeat = ServiceHeartbeat(self.settings, CALLBACK_DISPATCHER_COMPONENT)
+        heartbeat.start()
+        try:
+            while not stop_event.is_set():
+                if not self.run_once():
+                    stop_event.wait(self.IDLE_WAIT_SECONDS)
+        finally:
+            heartbeat.stop()
 
     def _headers(self, delivery_id: str, payload: bytes) -> dict[str, str]:
         headers = {
