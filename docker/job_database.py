@@ -1,4 +1,4 @@
-"""SQLite initialization for the single-host asynchronous Job service."""
+"""单机异步 Job 服务的 SQLite 初始化工具。"""
 
 from __future__ import annotations
 

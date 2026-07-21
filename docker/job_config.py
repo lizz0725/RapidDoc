@@ -1,4 +1,4 @@
-"""Environment-backed configuration for asynchronous Jobs."""
+"""从环境变量读取异步 Job 配置。"""
 
 from __future__ import annotations
 

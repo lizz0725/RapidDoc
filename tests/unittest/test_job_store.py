@@ -1,4 +1,4 @@
-"""Transactional tests for the asynchronous JobStore."""
+"""异步 JobStore 的事务行为测试。"""
 
 from __future__ import annotations
 

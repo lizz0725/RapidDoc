@@ -1,7 +1,7 @@
-"""Transactional persistence for asynchronous Job state.
+"""异步 Job 状态的事务化持久层。
 
-Only this module may issue state-changing SQL for the Job subsystem.  OCR,
-callbacks, and maintenance operations stay outside the short transactions here.
+Job 子系统中只有本模块可以执行改变状态的 SQL。OCR、回调和维护操作必须在这里的
+短事务之外执行，避免长时间持有 SQLite 写锁。
 """
 
 from __future__ import annotations
@@ -21,11 +21,11 @@ from job_types import CacheRole, CacheState, JobState, ResultSource, generate_ul
 
 
 class IdempotencyConflictError(Exception):
-    """A tenant reused an idempotency key for a different request."""
+    """同一租户使用同一幂等键提交了不同请求。"""
 
 
 class QueueCapacityError(Exception):
-    """The configured first-phase FIFO queue is full."""
+    """第一期固定上限的 FIFO 队列已满。"""
 
 
 @dataclass(frozen=True)

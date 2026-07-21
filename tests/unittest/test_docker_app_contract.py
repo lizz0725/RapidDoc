@@ -1,8 +1,7 @@
-"""Regression coverage for the synchronous Docker API contract.
+"""同步 Docker API 的回归测试。
 
-The async Job API must not alter the existing ``/file_parse`` behavior.  These
-tests replace the OCR boundary with a tiny async stub, so they run without
-models, LibreOffice, or network access.
+异步 Job API 不得改变既有 ``/file_parse`` 的行为。本测试以极小的异步桩替换
+OCR 调用边界，因此无需模型、LibreOffice 或网络即可执行。
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Shared types for the asynchronous Job subsystem."""
+"""异步 Job 子系统共用的状态类型。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from enum import Enum
 
 
 class TextEnum(str, Enum):
-    """String enums that can be stored directly in SQLite and JSON."""
+    """可直接保存到 SQLite 和 JSON 的字符串枚举。"""
 
     def __str__(self) -> str:
         return self.value
@@ -55,7 +55,7 @@ _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
 def generate_ulid(timestamp_ms: int | None = None) -> str:
-    """Return a 26-character, uppercase ULID without punctuation."""
+    """生成 26 位、全大写且不含特殊符号的 ULID。"""
 
     timestamp_ms = int(time.time() * 1000) if timestamp_ms is None else timestamp_ms
     if not 0 <= timestamp_ms < 2**48:

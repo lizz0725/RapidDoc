@@ -1,4 +1,4 @@
-"""Fixed admission limits for the first single-host CPU deployment."""
+"""第一期单机 CPU 部署固定的任务准入限制。"""
 
 
 class JobAdmissionLimits:

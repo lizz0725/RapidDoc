@@ -1,4 +1,4 @@
-"""Filesystem layout and atomic file operations for asynchronous Jobs."""
+"""异步 Job 的文件目录布局与原子文件操作。"""
 
 from __future__ import annotations
 

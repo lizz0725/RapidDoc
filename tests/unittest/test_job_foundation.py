@@ -1,4 +1,4 @@
-"""Unit coverage for asynchronous Job infrastructure without OCR models."""
+"""不加载 OCR 模型的异步 Job 基础设施单元测试。"""
 
 from __future__ import annotations
 
