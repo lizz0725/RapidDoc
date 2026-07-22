@@ -53,6 +53,13 @@ class DockerApiContractTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(path, ignored_paths)
 
+    def test_cpu_readme_uses_shell_for_mounted_release_entrypoint(self) -> None:
+        """挂载文件可能丢失可执行位，release 启动命令必须显式使用 Bash。"""
+        readme = (DOCKER_DIR / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("--entrypoint /bin/bash", readme)
+        self.assertIn("/opt/rapid-doc/release/start_api_gradio_cpu_slim.sh", readme)
+
     def test_file_parse_returns_markdown_without_loading_models(self) -> None:
         captured: dict[str, object] = {}
 

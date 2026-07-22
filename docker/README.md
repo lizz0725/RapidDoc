@@ -74,11 +74,12 @@ docker run -d \
   -v /opt/rapid-doc/release:/opt/rapid-doc/release:ro \
   -v /data/rapid-doc/jobs:/app/output/jobs \
   -e PYTHONPATH=/opt/rapid-doc/release:/app \
-  --entrypoint /opt/rapid-doc/release/start_api_gradio_cpu_slim.sh \
-  rapid-doc:cpu-slim-amd64
+  --entrypoint /bin/bash \
+  rapid-doc:cpu-slim-amd64 \
+  /opt/rapid-doc/release/start_api_gradio_cpu_slim.sh
 ```
 
-release 目录内可覆盖 `app.py`、自定义模块、SQL 和启动脚本；不要挂载 `/app`、`/app/rapid_doc` 或 `/app/models`，避免遮蔽镜像内的依赖、原始代码或模型。只更新 release 或 `.env` 后，执行 `docker restart rapid-doc` 即可生效；修改 Python/系统依赖、模型或基础镜像时需要重新构建镜像。
+release 目录内可覆盖 `app.py`、自定义模块、SQL 和启动脚本；由 `/bin/bash` 显式执行挂载脚本，因此不会依赖宿主机是否保留可执行位。不要挂载 `/app`、`/app/rapid_doc` 或 `/app/models`，避免遮蔽镜像内的依赖、原始代码或模型。只更新 release 或 `.env` 后，执行 `docker restart rapid-doc` 即可生效；修改 Python/系统依赖、模型或基础镜像时需要重新构建镜像。
 
 ### 关键 Job 配置
 
