@@ -46,6 +46,18 @@ class JobApiTest(unittest.TestCase):
         self.addCleanup(self._clear_job_service)
         self.client = TestClient(docker_app.app)
 
+    def test_job_modules_remain_compatible_with_python_310_image(self) -> None:
+        """镜像基于 Python 3.10，不能使用 3.11 才新增的 datetime.UTC。"""
+        job_directory = REPOSITORY_ROOT / "rapid_doc" / "jobs"
+
+        for module_name in ("job_api.py", "job_callback.py", "job_store.py"):
+            with self.subTest(module=module_name):
+                source = (job_directory / module_name).read_text(encoding="utf-8")
+                self.assertNotIn("from datetime import UTC", source)
+                self.assertNotIn("datetime.now(UTC)", source)
+                self.assertNotIn("fromtimestamp(timestamp, UTC)", source)
+                self.assertIn("timezone.utc", source)
+
     @staticmethod
     def pdf_bytes(page_count: int = 1) -> bytes:
         output = io.BytesIO()

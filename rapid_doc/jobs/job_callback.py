@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import threading
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Protocol
 
 import requests
@@ -137,7 +137,9 @@ class CallbackDispatcher:
         headers = {
             "Content-Type": "application/json",
             "X-RapidDoc-Delivery-Id": delivery_id,
-            "X-RapidDoc-Timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "X-RapidDoc-Timestamp": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
         }
         secret = self.settings.callback_signing_secret
         if secret:

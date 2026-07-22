@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, File, Form, Header, Request, UploadFile
@@ -161,7 +161,7 @@ def install_job_api(app: FastAPI) -> None:
         items = snapshot["items"]
         return JSONResponse(
             content={
-                "generatedAt": _timestamp_as_iso(int(datetime.now(UTC).timestamp())),
+                "generatedAt": _timestamp_as_iso(int(datetime.now(timezone.utc).timestamp())),
                 "queuedCount": len(items),
                 "runningJobCount": snapshot["running_job_count"],
                 "workerCapacity": service.settings.worker_processes,
@@ -283,7 +283,7 @@ def _error_details(job: dict[str, Any]) -> dict[str, str] | None:
 def _timestamp_as_iso(timestamp: int | None) -> str | None:
     if timestamp is None:
         return None
-    return datetime.fromtimestamp(timestamp, UTC).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _job_not_found_response() -> JSONResponse:

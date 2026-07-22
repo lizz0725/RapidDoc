@@ -11,7 +11,7 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1288,4 +1288,4 @@ def _current_timestamp() -> int:
 def _timestamp_as_iso(timestamp: int | None) -> str | None:
     if timestamp is None:
         return None
-    return datetime.fromtimestamp(timestamp, UTC).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
