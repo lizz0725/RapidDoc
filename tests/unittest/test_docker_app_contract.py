@@ -45,6 +45,14 @@ class DockerApiContractTest(unittest.TestCase):
         self.assertIn("rapid_doc.jobs.job_callback", script)
         self.assertIn("restart-workers.request", script)
 
+    def test_dockerignore_excludes_local_runtime_artifacts(self) -> None:
+        """本地虚拟环境和运行产物不能进入 CPU 镜像构建上下文。"""
+        ignored_paths = (REPOSITORY_ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+        for path in (".venv", "rapid_doc.egg-info", "output", "*.tar"):
+            with self.subTest(path=path):
+                self.assertIn(path, ignored_paths)
+
     def test_file_parse_returns_markdown_without_loading_models(self) -> None:
         captured: dict[str, object] = {}
 
