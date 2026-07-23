@@ -78,3 +78,9 @@ CREATE TABLE IF NOT EXISTS service_heartbeats (
     details_json JSON,
     PRIMARY KEY (component_type, component_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INT PRIMARY KEY,
+    description VARCHAR(255) NOT NULL,
+    applied_at BIGINT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +111,11 @@ def initialize_database(settings: JobSettings) -> None:
             statement = statement.strip()
             if statement:
                 connection.execute(statement)
+        connection.execute(
+            "INSERT IGNORE INTO schema_migrations(version, description, applied_at) "
+            "VALUES (?, ?, ?)",
+            (1, "MySQL 8 初始 Job Schema", int(time.time())),
+        )
     finally:
         connection.close()
 
