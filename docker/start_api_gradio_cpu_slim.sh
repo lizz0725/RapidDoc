@@ -10,11 +10,13 @@ if [ -f "/app/.env" ]; then
 fi
 
 export PYTHONPATH="${PYTHONPATH:-/app}"
+export TZ="${TZ:-Asia/Shanghai}"
 export API_PORT="${API_PORT:-8888}"
 export GRADIO_SERVER_NAME="${GRADIO_SERVER_NAME:-0.0.0.0}"
 export GRADIO_SERVER_PORT="${GRADIO_SERVER_PORT:-7860}"
 export LOG_LEVEL="${LOG_LEVEL:-INFO}"
 export RAPID_DOC_JOB_DATA_DIR="${RAPID_DOC_JOB_DATA_DIR:-/app/output/jobs}"
+export RAPID_DOC_COMPONENT_RESTART_DELAY_SECONDS="${RAPID_DOC_COMPONENT_RESTART_DELAY_SECONDS:-60}"
 
 if [ -f "/opt/rapid-doc/release/app.py" ]; then
     APP_PATH="/opt/rapid-doc/release/app.py"
@@ -119,8 +121,8 @@ reap_and_restart_components() {
         if [ "${SHUTTING_DOWN}" -eq 1 ]; then
             continue
         fi
-        echo "组件=${name} pid=${pid} 已退出，exitCode=${exit_code}；1 秒后重启。" >&2
-        sleep 1
+        echo "组件=${name} pid=${pid} 已退出，exitCode=${exit_code}；${RAPID_DOC_COMPONENT_RESTART_DELAY_SECONDS} 秒后重启。" >&2
+        sleep "${RAPID_DOC_COMPONENT_RESTART_DELAY_SECONDS}"
         start_component "${name}"
     done
 }

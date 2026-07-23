@@ -341,7 +341,7 @@ PDF 页数限制只对原始 `pdf` 文件生效。若 PDF 总页数大于 `RAPID
 | `RAPID_DOC_JOB_MAX_RUN_MINUTES` | `60` | 单个 owner Job 的最大执行时长，适用于 PDF、Office 文件和图片。 |
 | `RAPID_DOC_TOMBSTONE_TTL_MINUTES` | `43200` | 结果删除后仍保留状态摘要的时长。 |
 | `RAPID_DOC_JOB_MAX_PROCESSING_ATTEMPTS` | `2` | 崩溃恢复等可重试处理的最大 attempt 数。 |
-| `RAPID_DOC_JOB_LEASE_SECONDS` | `120` | worker 持有任务的内部租约时长。 |
+| `RAPID_DOC_JOB_LEASE_SECONDS` | `60` | worker 持有任务的内部租约时长。 |
 | `RAPID_DOC_JOB_HEARTBEAT_SECONDS` | `30` | worker 内部续租间隔。 |
 | `RAPID_DOC_MAINTENANCE_WATCHDOG_INTERVAL_SECONDS` | `10` | Job Maintenance Worker 内 Watchdog 的检查间隔。 |
 | `RAPID_DOC_MAINTENANCE_SWEEPER_INTERVAL_SECONDS` | `60` | Job Maintenance Worker 内 Sweeper 的清理间隔。 |
@@ -990,3 +990,18 @@ T01-T10 均已完成并分别提交。当前分支已形成可供内网单机 CP
 本设计以“**先稳住 CPU OCR 的并发和资源，再提高吞吐**”为优先级：单 worker、SQLite 持久化 FIFO、可恢复状态机、按租户 SHA-256 缓存和进行中合并，已经能覆盖业务系统并发调用时最重要的资源控制与重复识别问题。
 
 后续开发应按本设计实现后，先在内网 AMD CPU 服务器上使用真实 PDF 压测单 worker 的内存、平均耗时、长文档超时和缓存命中效果，再决定是否提高 `RAPID_DOC_WORKER_PROCESSES` 或迁移 MySQL/MinIO。
+
+## 23. T10 之后的生产化子任务
+
+T01-T10 已完成。后续工作按以下顺序推进，每项先完成针对性测试，再进入下一项：
+
+| 顺序 | 子任务 | 前置依赖 | 主要交付 | 状态 |
+| --- | --- | --- | --- | --- |
+| P01 | CPU 镜像稳定性收口 | T10 | 延迟导入、容器中国时区、组件异常重启等待配置、配置注释和回归测试。 | 已完成 |
+| P02 | 数据库存储抽象与 MySQL 配置 | P01 | 抽象数据库连接/事务边界，增加 MySQL 连接配置与启动校验，保留 SQLite 本地兼容模式。 | 进行中 |
+| P03 | MySQL 8 JobStore 实现 | P02 | MySQL 8 表结构、索引、事务/CAS、租约、缓存和回调 Outbox 适配；不改变 Job API。 | 待开始 |
+| P04 | MySQL 迁移与双环境测试 | P03 | SQLite 数据迁移工具、MySQL 初始化/升级脚本、并发和故障恢复测试。 | 待开始 |
+| P05 | 文件日志与任务耗时可观测性 | P01 | 可挂载的中文滚动日志、Job 排队/执行/总耗时字段及部署说明。 | 待开始 |
+| P06 | 生产环境验收与镜像交付 | P03、P04、P05 | 内网无网络启动、MySQL 连接、重启恢复、缓存命中、日志轮转和目标 AMD CPU 性能基线。 | 待开始 |
+
+P02 和 P03 不会删除现有 SQLite 支持；本地验证继续可使用 SQLite，生产通过配置切换到 MySQL。只有 MySQL 的并发事务、索引和恢复测试通过后，才把生产默认值切换为 MySQL。

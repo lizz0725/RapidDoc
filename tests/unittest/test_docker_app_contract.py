@@ -44,6 +44,8 @@ class DockerApiContractTest(unittest.TestCase):
         self.assertIn("rapid_doc.jobs.job_maintenance", script)
         self.assertIn("rapid_doc.jobs.job_callback", script)
         self.assertIn("restart-workers.request", script)
+        self.assertIn('RAPID_DOC_COMPONENT_RESTART_DELAY_SECONDS:-60', script)
+        self.assertIn('sleep "${RAPID_DOC_COMPONENT_RESTART_DELAY_SECONDS}"', script)
 
     def test_dockerignore_excludes_local_runtime_artifacts(self) -> None:
         """本地虚拟环境和运行产物不能进入 CPU 镜像构建上下文。"""

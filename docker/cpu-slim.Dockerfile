@@ -16,7 +16,10 @@ RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https
         fontconfig \
         curl \
         ca-certificates \
+        tzdata \
         libgl1 && \
+    ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo Asia/Shanghai > /etc/timezone && \
     fc-cache -fv && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
@@ -35,6 +38,7 @@ RUN python3 -m pip install --upgrade pip setuptools wheel --break-system-package
     python3 -m pip cache purge
 
 ENV PYTHONPATH=/app
+ENV TZ=Asia/Shanghai
 ENV API_PORT=8888
 ENV GRADIO_SERVER_NAME=0.0.0.0
 ENV GRADIO_SERVER_PORT=7860

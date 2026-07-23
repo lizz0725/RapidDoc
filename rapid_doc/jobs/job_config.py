@@ -75,7 +75,7 @@ class JobSettings:
     max_run_minutes: int = 60
     tombstone_ttl_minutes: int = 43_200
     max_processing_attempts: int = 2
-    lease_seconds: int = 120
+    lease_seconds: int = 60
     heartbeat_seconds: int = 30
     watchdog_interval_seconds: int = 10
     sweeper_interval_seconds: int = 60
@@ -101,7 +101,7 @@ class JobSettings:
             max_processing_attempts=_read_positive_int(
                 environ, "RAPID_DOC_JOB_MAX_PROCESSING_ATTEMPTS", 2
             ),
-            lease_seconds=_read_positive_int(environ, "RAPID_DOC_JOB_LEASE_SECONDS", 120),
+            lease_seconds=_read_positive_int(environ, "RAPID_DOC_JOB_LEASE_SECONDS", 60),
             heartbeat_seconds=_read_positive_int(
                 environ, "RAPID_DOC_JOB_HEARTBEAT_SECONDS", 30
             ),
