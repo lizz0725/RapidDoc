@@ -35,6 +35,33 @@ class JobFoundationTest(unittest.TestCase):
         )
         self.assertEqual(custom_directory.data_dir, Path("/data/rapid-doc/jobs"))
 
+    def test_mysql_settings_are_parsed_without_being_used_by_sqlite(self) -> None:
+        settings = JobSettings.from_env(
+            {
+                "RAPID_DOC_DB_BACKEND": "mysql",
+                "RAPID_DOC_MYSQL_HOST": "mysql.internal",
+                "RAPID_DOC_MYSQL_PORT": "3307",
+                "RAPID_DOC_MYSQL_DATABASE": "rapid_doc_prod",
+                "RAPID_DOC_MYSQL_USER": "rapid_doc_app",
+                "RAPID_DOC_MYSQL_PASSWORD": "secret",
+                "RAPID_DOC_MYSQL_POOL_SIZE": "8",
+            }
+        )
+
+        self.assertEqual(settings.database_backend, "mysql")
+        self.assertEqual(settings.mysql_host, "mysql.internal")
+        self.assertEqual(settings.mysql_port, 3307)
+        self.assertEqual(settings.mysql_database, "rapid_doc_prod")
+        self.assertEqual(settings.mysql_user, "rapid_doc_app")
+        self.assertEqual(settings.mysql_password, "secret")
+        self.assertEqual(settings.mysql_pool_size, 8)
+        with self.assertRaisesRegex(RuntimeError, "MySQL 存储尚未启用"):
+            _ = settings.database_path
+
+    def test_unknown_database_backend_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be sqlite or mysql"):
+            JobSettings.from_env({"RAPID_DOC_DB_BACKEND": "postgres"})
+
     def test_settings_reject_incompatible_timing_configuration(self) -> None:
         with self.assertRaisesRegex(ValueError, "CACHE_TTL"):
             JobSettings.from_env(

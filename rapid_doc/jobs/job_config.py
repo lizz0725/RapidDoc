@@ -82,6 +82,13 @@ class JobSettings:
     callback_connect_timeout_seconds: int = 5
     callback_read_timeout_seconds: int = 30
     callback_signing_secret: str | None = None
+    database_backend: str = "sqlite"
+    mysql_host: str = "127.0.0.1"
+    mysql_port: int = 3306
+    mysql_database: str = "rapid_doc"
+    mysql_user: str = "rapid_doc"
+    mysql_password: str = ""
+    mysql_pool_size: int = 5
     data_dir: Path = DEFAULT_JOB_DATA_DIR
 
     @classmethod
@@ -120,6 +127,13 @@ class JobSettings:
             callback_signing_secret=_read_optional_secret(
                 environ, "RAPID_DOC_CALLBACK_SIGNING_SECRET"
             ),
+            database_backend=environ.get("RAPID_DOC_DB_BACKEND", "sqlite").strip().lower(),
+            mysql_host=environ.get("RAPID_DOC_MYSQL_HOST", "127.0.0.1").strip(),
+            mysql_port=_read_positive_int(environ, "RAPID_DOC_MYSQL_PORT", 3306),
+            mysql_database=environ.get("RAPID_DOC_MYSQL_DATABASE", "rapid_doc").strip(),
+            mysql_user=environ.get("RAPID_DOC_MYSQL_USER", "rapid_doc").strip(),
+            mysql_password=environ.get("RAPID_DOC_MYSQL_PASSWORD", ""),
+            mysql_pool_size=_read_positive_int(environ, "RAPID_DOC_MYSQL_POOL_SIZE", 5),
             data_dir=Path(environ.get("RAPID_DOC_JOB_DATA_DIR", str(DEFAULT_JOB_DATA_DIR))),
         )
         settings.validate()
@@ -127,6 +141,10 @@ class JobSettings:
 
     @property
     def database_path(self) -> Path:
+        if self.database_backend != "sqlite":
+            raise RuntimeError(
+                "RAPID_DOC_DB_BACKEND=mysql 已配置，但 MySQL 存储尚未启用；请等待 P03 完成"
+            )
         return self.data_dir / "rapid-doc.db"
 
     @property
@@ -160,6 +178,14 @@ class JobSettings:
         return max(60, self.heartbeat_seconds * 3)
 
     def validate(self) -> None:
+        if self.database_backend not in {"sqlite", "mysql"}:
+            raise ValueError("RAPID_DOC_DB_BACKEND must be sqlite or mysql")
+        if not self.mysql_host:
+            raise ValueError("RAPID_DOC_MYSQL_HOST must not be empty")
+        if not self.mysql_database:
+            raise ValueError("RAPID_DOC_MYSQL_DATABASE must not be empty")
+        if not self.mysql_user:
+            raise ValueError("RAPID_DOC_MYSQL_USER must not be empty")
         if self.cache_ttl_minutes < self.result_ttl_minutes:
             raise ValueError("RAPID_DOC_CACHE_TTL_MINUTES must be at least RAPID_DOC_RESULT_TTL_MINUTES")
         if self.heartbeat_seconds >= self.lease_seconds:
