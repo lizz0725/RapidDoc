@@ -64,6 +64,8 @@ docker save -o rapid-doc-cpu-slim-amd64.tar rapid-doc:cpu-slim-amd64
 /data/rapid-doc/jobs/
 ```
 
+异步 Job 元数据存放在 MySQL 8，容器只挂载上传文件、OCR 结果、缓存和文件日志。生产环境需要先准备好 MySQL 数据库、账号和密码，并在 `.env` 中配置 `RAPID_DOC_MYSQL_*`。
+
 ```bash
 docker run -d \
   --name rapid-doc \
@@ -88,6 +90,14 @@ release 目录内可覆盖 `app.py`、自定义模块、SQL 和启动脚本；�
 | `RAPID_DOC_ASYNC_ENABLED` | `true` | 是否启用新增的 `/jobs` API 和后台进程。 |
 | `RAPID_DOC_WORKER_PROCESSES` | `1` | OCR OS 进程数，不等同于 Uvicorn worker 数。 |
 | `RAPID_DOC_JOB_DATA_DIR` | `/app/output/jobs` | 原文件、临时结果与缓存目录；Job 元数据存放在 MySQL。 |
+| `RAPID_DOC_LOG_DIR` | `/app/output/jobs/logs` | 各组件中文文件日志目录，随 Job 数据目录挂载时会落到宿主机；日志按 100MB 轮转并保留 15 天。 |
+| `RAPID_DOC_DB_BACKEND` | `mysql` | Job 元数据后端；当前生产化版本只支持 MySQL。 |
+| `RAPID_DOC_MYSQL_HOST` | `127.0.0.1` | MySQL 8 服务地址。 |
+| `RAPID_DOC_MYSQL_PORT` | `3306` | MySQL 8 服务端口。 |
+| `RAPID_DOC_MYSQL_DATABASE` | `rapid_doc` | Job 元数据数据库名。 |
+| `RAPID_DOC_MYSQL_USER` | `rapid_doc` | MySQL 用户名。 |
+| `RAPID_DOC_MYSQL_PASSWORD` | 空 | MySQL 密码；生产环境必须设置。 |
+| `RAPID_DOC_MYSQL_POOL_SIZE` | `5` | API 进程内 MySQL 连接池大小。 |
 | `RAPID_DOC_MAX_FILE_SIZE_MB` | `100` | 单个上传文件大小上限，单位 MB。 |
 | `RAPID_DOC_ALLOWED_EXTENSIONS` | `pdf,doc,docx,xls,xlsx,png,jpg,jpeg,tif,tiff` | Job 上传白名单。 |
 | `RAPID_DOC_MAX_PDF_PAGES` | `100` | PDF 最多处理前 N 页。 |
@@ -104,6 +114,13 @@ curl http://localhost:8888/health/ready
 ```
 
 容器刚启动时，`/health/ready` 可能短暂返回 `503`，直到 OCR Worker、维护进程和回调分发器都写入心跳。返回 `200` 后才应接入流量。已构建完成的镜像可在无外网环境中运行；若业务方提交了 `callbackUrl`，该回调地址仍需要在部署网络中可达。
+
+查看后台组件文件日志：
+
+```bash
+ls -lh /data/rapid-doc/jobs/logs
+tail -f /data/rapid-doc/jobs/logs/rapid-doc-*.log
+```
 
 ## 服务端口
 
