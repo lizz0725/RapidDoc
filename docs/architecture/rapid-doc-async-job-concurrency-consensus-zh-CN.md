@@ -558,6 +558,9 @@ curl -X POST 'http://rapid-doc.internal:8000/jobs' \
 | `sourcePageCount`、`processedPageCount`、`truncated` | 原始 PDF 的页数处理信息；非 PDF 的前两项为 `null`，`truncated=false`。 |
 | `warnings` | 例如页数截断提示。 |
 | `submittedAt`、`startedAt`、`finishedAt` | 生命周期时间。 |
+| `queueDurationSeconds` | 排队等待耗时；任务尚未开始时按当前查询时间计算。 |
+| `runDurationSeconds` | OCR 执行耗时；任务尚未开始时为 `null`，执行中按当前查询时间计算。 |
+| `totalDurationSeconds` | 从提交到结束或当前查询时间的总耗时。 |
 | `resultUrl` | 获取完整 Markdown/JSON 的地址。 |
 | `error` | 失败、过期或超时时的错误对象；成功时为 `null`。 |
 
@@ -757,7 +760,7 @@ T07 已实现上述数据库与文件收敛：临时 JSON 完整时补写 Markdo
 - `GET /health/live`：FastAPI 存活。
 - `GET /health/ready`：MySQL 可用、数据目录可写、worker/dispatcher/maintenance worker 心跳新鲜、容量未满。
 - `GET /ops/jobs/queue`：返回全部真实 OCR 排队任务，按 `queue_seq ASC` 排序。仅返回 `job_state=queued`，不包含 `running`、`waiting_for_result`、缓存命中或终态 Job。
-- 结构化日志：`jobId`、可选 `businessRef`、`queueSeq`、状态变化、worker ID、attempt、排队等待时长、执行时长、缓存命中类型、回调结果。
+- 结构化日志：`jobId`、可选 `businessRef`、`queueSeq`、状态变化、worker ID、attempt、排队等待时长、执行时长、缓存命中类型、回调结果。容器同时将各进程日志写入 `RAPID_DOC_LOG_DIR`，默认是 `/app/output/jobs/logs`，按 100MB 轮转并保留 15 天。
 
 `GET /ops/jobs/queue` 不接受 `tenantId`，必须只通过运维网关或受控内网暴露，不能直接提供给业务调用方。当前固定队列上限为 100，因此第一期不分页。响应保持精简：
 
@@ -999,7 +1002,7 @@ T01-T10 已完成。后续工作按以下顺序推进，每项先完成针对性
 | P02 | 数据库存储抽象与 MySQL 配置 | P01 | 抽象数据库连接/事务边界，增加 MySQL 连接配置与启动校验，统一 MySQL 后端。 | 已完成 |
 | P03 | MySQL 8 JobStore 实现 | P02 | MySQL 8 表结构、索引、事务/CAS、租约、缓存和回调 Outbox 适配；不改变 Job API。 | 已完成 |
 | P04 | MySQL 初始化与生产测试 | P03 | MySQL 初始化/升级脚本、并发和故障恢复测试；不再维护 SQLite 双后端迁移。 | 已完成 |
-| P05 | 文件日志与任务耗时可观测性 | P01 | 可挂载的中文滚动日志、Job 排队/执行/总耗时字段及部署说明。 | 待开始 |
+| P05 | 文件日志与任务耗时可观测性 | P01 | 可挂载的中文滚动日志、Job 排队/执行/总耗时字段及部署说明。 | 已完成 |
 | P06 | 生产环境验收与镜像交付 | P03、P04、P05 | 内网无网络启动、MySQL 连接、重启恢复、缓存命中、日志轮转和目标 AMD CPU 性能基线。 | 待开始 |
 
-P02 和 P03 已将 Job 元数据统一到 MySQL 8；任务原文件、临时结果和缓存仍保留在本地挂载目录。P04 已完成 MySQL Schema 的可重复初始化、版本记录、事务回滚、并发领取、租约恢复和过期清理验证，共 44 个 Job 测试通过。后续进入文件日志与任务耗时可观测性，再进行生产镜像重建与部署验收。
+P02 和 P03 已将 Job 元数据统一到 MySQL 8；任务原文件、临时结果和缓存仍保留在本地挂载目录。P04 已完成 MySQL Schema 的可重复初始化、版本记录、事务回滚、并发领取、租约恢复和过期清理验证；P05 已完成可挂载文件日志和动态耗时字段。后续进行生产镜像重建与部署验收。

@@ -151,6 +151,9 @@ class CallbackDispatcher:
 def main() -> None:
     """以 ``python -m rapid_doc.jobs.job_callback`` 运行回调 Dispatcher。"""
 
+    from .job_logging import configure_file_logging
+
+    configure_file_logging()
     CallbackDispatcher(JobSettings.from_env()).run_forever()
 
 

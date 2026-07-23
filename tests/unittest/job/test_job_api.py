@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 
 from rapid_doc.jobs.job_admission import JobAdmissionService
+from rapid_doc.jobs.job_api import _job_durations
 from rapid_doc.jobs.job_config import JobSettings
 from rapid_doc.jobs.job_database import connect_database
 from rapid_doc.jobs.job_limits import JobAdmissionLimits
@@ -286,6 +287,26 @@ class JobApiTest(unittest.TestCase):
         )
         self.assertEqual(denied.status_code, 404)
         self.assertEqual(denied.json()["error"]["code"], "JOB_NOT_FOUND")
+
+    def test_job_durations_are_reported_in_seconds(self) -> None:
+        self.assertEqual(
+            _job_durations(
+                {"submitted_at": 100, "started_at": 130, "finished_at": 190},
+                now=200,
+            ),
+            {
+                "queueDurationSeconds": 30,
+                "runDurationSeconds": 60,
+                "totalDurationSeconds": 90,
+            },
+        )
+        self.assertEqual(
+            _job_durations(
+                {"submitted_at": 100, "started_at": None, "finished_at": None},
+                now=145,
+            )["totalDurationSeconds"],
+            45,
+        )
 
     def test_operations_queue_returns_only_fifo_owners_and_ready_requires_components(self) -> None:
         first = self.client.post(

@@ -176,6 +176,9 @@ class _LeaseHeartbeat:
 def main() -> None:
     """以 ``python -m rapid_doc.jobs.job_worker`` 运行单个 OCR Worker。"""
 
+    from .job_logging import configure_file_logging
+
+    configure_file_logging()
     JobWorker(JobSettings.from_env()).run_forever()
 
 

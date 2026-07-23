@@ -210,6 +210,7 @@ def _creation_response(job: dict[str, Any]) -> dict[str, Any]:
 
 def _status_response(job: dict[str, Any], worker_capacity: int) -> dict[str, Any]:
     job_id = job["job_id"]
+    durations = _job_durations(job)
     return {
         "jobId": job_id,
         "jobState": job["job_state"],
@@ -230,6 +231,7 @@ def _status_response(job: dict[str, Any], worker_capacity: int) -> dict[str, Any
         "submittedAt": _timestamp_as_iso(job["submitted_at"]),
         "startedAt": _timestamp_as_iso(job["started_at"]),
         "finishedAt": _timestamp_as_iso(job["finished_at"]),
+        **durations,
         "resultUrl": f"/jobs/{job_id}/result",
         "error": _error_details(job),
     }
@@ -284,6 +286,29 @@ def _timestamp_as_iso(timestamp: int | None) -> str | None:
     if timestamp is None:
         return None
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _job_durations(job: dict[str, Any], now: int | None = None) -> dict[str, int | None]:
+    """按秒返回排队、执行和总耗时；未进入相应阶段时保持 null。"""
+
+    now = int(datetime.now(timezone.utc).timestamp()) if now is None else now
+    submitted_at = job.get("submitted_at")
+    started_at = job.get("started_at")
+    finished_at = job.get("finished_at")
+    end_at = finished_at or now
+    return {
+        "queueDurationSeconds": (
+            max(0, int((started_at or end_at) - submitted_at))
+            if submitted_at is not None
+            else None
+        ),
+        "runDurationSeconds": (
+            max(0, int(end_at - started_at)) if started_at is not None else None
+        ),
+        "totalDurationSeconds": (
+            max(0, int(end_at - submitted_at)) if submitted_at is not None else None
+        ),
+    }
 
 
 def _job_not_found_response() -> JSONResponse:

@@ -14,6 +14,8 @@ import click
 import gradio as gr
 from dotenv import load_dotenv
 load_dotenv()
+from rapid_doc.jobs.job_logging import configure_file_logging
+configure_file_logging()
 from gradio_pdf import PDF
 from loguru import logger
 

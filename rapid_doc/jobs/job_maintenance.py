@@ -204,6 +204,9 @@ def _current_timestamp() -> int:
 def main() -> None:
     """以 ``python -m rapid_doc.jobs.job_maintenance`` 运行维护进程。"""
 
+    from .job_logging import configure_file_logging
+
+    configure_file_logging()
     JobMaintenance(JobSettings.from_env()).run_forever()
 
 

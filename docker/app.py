@@ -23,6 +23,7 @@ from file_converter import ensure_pdf, OFFICE_EXTENSIONS
 from rapid_doc.cli.common import aio_do_parse, old_office_suffixes, pdf_suffixes, image_suffixes, office_suffixes
 from rapid_doc.jobs.job_api import install_job_api
 from rapid_doc.jobs.job_config import JobSettings
+from rapid_doc.jobs.job_logging import configure_file_logging
 from rapid_doc.jobs.job_runtime import JobRuntime
 from rapid_doc.utils.empty_office import normalize_empty_office_bytes
 from rapid_doc.utils.office_converter import convert_legacy_office_to_modern
@@ -409,5 +410,6 @@ async def file_parse(
 
 if __name__ == "__main__":
     load_dotenv()
+    configure_file_logging()
     # os.environ['MINERU_MODEL_SOURCE'] = "modelscope"
     uvicorn.run(app, host="0.0.0.0", port=8888)
