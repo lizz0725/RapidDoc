@@ -1003,6 +1003,6 @@ T01-T10 已完成。后续工作按以下顺序推进，每项先完成针对性
 | P03 | MySQL 8 JobStore 实现 | P02 | MySQL 8 表结构、索引、事务/CAS、租约、缓存和回调 Outbox 适配；不改变 Job API。 | 已完成 |
 | P04 | MySQL 初始化与生产测试 | P03 | MySQL 初始化/升级脚本、并发和故障恢复测试；不再维护 SQLite 双后端迁移。 | 已完成 |
 | P05 | 文件日志与任务耗时可观测性 | P01 | 可挂载的中文滚动日志、Job 排队/执行/总耗时字段及部署说明。 | 已完成 |
-| P06 | 生产环境验收与镜像交付 | P03、P04、P05 | 内网无网络启动、MySQL 连接、重启恢复、缓存命中、日志轮转和目标 AMD CPU 性能基线。 | 进行中：ARM64 本机构建和启动 smoke 已通过，AMD64 交付包待重建 |
+| P06 | 生产环境验收与镜像交付 | P03、P04、P05 | 内网无网络启动、MySQL 连接、重启恢复、缓存命中、日志轮转和目标 AMD CPU 性能基线。 | 本机可验证项已完成：ARM64 启动 smoke 与 AMD64 离线包均已通过；目标 AMD CPU 性能基线待服务器实测 |
 
-P02 和 P03 已将 Job 元数据统一到 MySQL 8；任务原文件、临时结果和缓存仍保留在本地挂载目录。P04 已完成 MySQL Schema 的可重复初始化、版本记录、事务回滚、并发领取、租约恢复和过期清理验证；P05 已完成可挂载文件日志和动态耗时字段。P06 已完成本机 ARM64 镜像 `rapid-doc:cpu-slim-p06-arm64` 构建，镜像架构 `linux/arm64`，大小约 1.59GB；临时容器连接本机 MySQL 8 后 `/health/ready=200`，文件日志已写入挂载目录，启动日志未出现 `Bus error`。后续继续重建 AMD64 镜像、导出离线包，并在目标 AMD CPU 服务器记录性能基线。
+P02 和 P03 已将 Job 元数据统一到 MySQL 8；任务原文件、临时结果和缓存仍保留在本地挂载目录。P04 已完成 MySQL Schema 的可重复初始化、版本记录、事务回滚、并发领取、租约恢复和过期清理验证；P05 已完成可挂载文件日志和动态耗时字段。P06 已完成本机 ARM64 镜像 `rapid-doc:cpu-slim-p06-arm64` 构建，镜像架构 `linux/arm64`，大小约 1.59GB；临时容器连接本机 MySQL 8 后 `/health/ready=200`，文件日志已写入挂载目录，启动日志未出现 `Bus error`。P06 也已完成 AMD64 镜像 `rapid-doc:cpu-slim-p06-amd64` 构建，镜像架构 `linux/amd64`，镜像大小约 1.65GB；依赖 smoke 输出 `deps-ok`，镜像内 `/app/.env.example` 已包含 MySQL 与日志目录配置。离线包已导出为 `rapid-doc-cpu-slim-p06-amd64.tar`，文件大小约 1.5GB，SHA-256 为 `e3704f2bb53bece16210112e911af42ac8dda9ab35e42d7ea4e897d844a2350d`。目标 AMD CPU 服务器上的真实性能基线仍需部署后记录。
