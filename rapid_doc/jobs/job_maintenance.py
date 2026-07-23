@@ -47,11 +47,11 @@ class JobMaintenance:
     ) -> None:
         self.settings = settings
         self.artifacts = artifacts or ArtifactStore(settings.data_dir)
-        self.store = store or JobStore(settings.database_path, settings)
+        self.store = store or JobStore(settings, settings)
 
     def initialize(self) -> None:
         self.artifacts.ensure_layout()
-        initialize_database(self.settings.database_path)
+        initialize_database(self.settings)
 
     def run_watchdog_once(self, now: int | None = None) -> MaintenanceReport:
         """恢复发布中任务、回收失效租约，并标记运行超时任务。"""

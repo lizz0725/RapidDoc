@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import tempfile
 import threading
 import time
@@ -14,7 +13,7 @@ from typing import Any
 
 from .job_artifacts import ArtifactStore
 from .job_config import JobSettings
-from .job_database import connect_database, initialize_database
+from .job_database import DatabaseError, connect_database, initialize_database
 from .job_limits import JobAdmissionLimits
 
 
@@ -44,7 +43,7 @@ class JobRuntime:
 
     def initialize(self) -> None:
         self.artifacts.ensure_layout()
-        initialize_database(self.settings.database_path)
+        initialize_database(self.settings)
 
     def record_heartbeat(
         self,
@@ -64,18 +63,18 @@ class JobRuntime:
             if details is not None
             else None
         )
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             connection.execute(
                 """
                 INSERT INTO service_heartbeats (
                     component_type, component_id, pid, component_state, last_seen_at, details_json
                 ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(component_type, component_id) DO UPDATE SET
-                    pid = excluded.pid,
-                    component_state = excluded.component_state,
-                    last_seen_at = excluded.last_seen_at,
-                    details_json = excluded.details_json
+                ON DUPLICATE KEY UPDATE
+                    pid = VALUES(pid),
+                    component_state = VALUES(component_state),
+                    last_seen_at = VALUES(last_seen_at),
+                    details_json = VALUES(details_json)
                 """,
                 (
                     component_type,
@@ -90,21 +89,21 @@ class JobRuntime:
             connection.close()
 
     def readiness(self, now: int | None = None) -> dict[str, Any]:
-        """返回 API 就绪检查需要的 SQLite、文件和后台进程状态。"""
+        """返回 API 就绪检查需要的 MySQL、文件和后台进程状态。"""
 
         now = _current_timestamp() if now is None else now
         checks: dict[str, Any] = {}
         try:
             self.initialize()
             self._probe_data_directory()
-            connection = connect_database(self.settings.database_path)
+            connection = connect_database(self.settings)
             try:
                 connection.execute("SELECT 1").fetchone()
             finally:
                 connection.close()
             checks["database"] = {"ready": True}
             checks["dataDirectory"] = {"ready": True}
-        except (OSError, sqlite3.Error) as exc:
+        except (OSError, DatabaseError) as exc:
             checks["database"] = {"ready": False, "message": str(exc)}
             checks["dataDirectory"] = {"ready": False, "message": str(exc)}
 
@@ -120,7 +119,7 @@ class JobRuntime:
             checks["storage"] = {"ready": False, "message": str(exc)}
         try:
             components = self._component_readiness(now)
-        except (OSError, sqlite3.Error) as exc:
+        except (OSError, DatabaseError) as exc:
             components = {}
             checks["componentsError"] = {"ready": False, "message": str(exc)}
         checks["components"] = {
@@ -150,7 +149,7 @@ class JobRuntime:
             CALLBACK_DISPATCHER_COMPONENT: 1,
         }
         fresh_after = now - self.settings.background_heartbeat_fresh_seconds
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             counts = {
                 row["component_type"]: row["healthy_count"]
@@ -233,7 +232,7 @@ class ServiceHeartbeat:
                 state=state,
                 details=self.details,
             )
-        except (OSError, sqlite3.Error):
+        except (OSError, DatabaseError):
             # 数据盘暂时不可用时不应让心跳线程终止主进程；ready 会呈现该故障。
             return
 

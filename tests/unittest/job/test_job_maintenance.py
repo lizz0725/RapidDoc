@@ -13,6 +13,7 @@ from rapid_doc.jobs.job_database import initialize_database
 from rapid_doc.jobs.job_maintenance import JobMaintenance
 from rapid_doc.jobs.job_store import JobStore, JobSubmission
 from rapid_doc.jobs.job_types import CacheRole, JobState
+from tests.unittest.job.test_support import mysql_test_settings
 
 
 class JobMaintenanceTest(unittest.TestCase):
@@ -20,8 +21,8 @@ class JobMaintenanceTest(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
         self.addCleanup(self.temporary_directory.cleanup)
-        self.settings = JobSettings(
-            data_dir=self.root / "jobs",
+        self.settings = mysql_test_settings(
+            self.root / "jobs",
             queue_expire_minutes=1,
             result_ttl_minutes=1,
             cache_ttl_minutes=1,
@@ -31,10 +32,9 @@ class JobMaintenanceTest(unittest.TestCase):
             lease_seconds=10,
             heartbeat_seconds=1,
         )
-        initialize_database(self.settings.database_path)
         self.artifacts = ArtifactStore(self.settings.data_dir)
         self.artifacts.ensure_layout()
-        self.store = JobStore(self.settings.database_path, self.settings)
+        self.store = JobStore(self.settings, self.settings)
         self.maintenance = JobMaintenance(
             self.settings, store=self.store, artifacts=self.artifacts
         )

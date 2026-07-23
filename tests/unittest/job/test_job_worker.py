@@ -13,6 +13,7 @@ from rapid_doc.jobs.job_parser import JobParseError, ParsedDocument
 from rapid_doc.jobs.job_store import JobStore, JobSubmission
 from rapid_doc.jobs.job_types import CacheRole, CacheState, JobState
 from rapid_doc.jobs.job_worker import JobWorker
+from tests.unittest.job.test_support import mysql_test_settings
 
 
 class FixtureParser:
@@ -41,11 +42,10 @@ class JobWorkerTest(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
         self.addCleanup(self.temporary_directory.cleanup)
-        self.settings = JobSettings(data_dir=self.root / "jobs")
-        initialize_database(self.settings.database_path)
+        self.settings = mysql_test_settings(self.root / "jobs")
         self.artifacts = ArtifactStore(self.settings.data_dir)
         self.artifacts.ensure_layout()
-        self.store = JobStore(self.settings.database_path, self.settings)
+        self.store = JobStore(self.settings, self.settings)
         self.now = 1_700_000_000
 
     def enqueue(self, digest: str, *, fingerprint: str = "request-v1") -> dict[str, object]:
@@ -88,7 +88,7 @@ class JobWorkerTest(unittest.TestCase):
         result = self.artifacts.read_result_json(completed_owner["result_path"])
         self.assertEqual(result["markdown"], "# 合同\n\n正文")
         self.assertEqual(result["metadata"]["engine"], "fixture")
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             cache = connection.execute(
                 "SELECT cache_state, result_bytes FROM parse_cache WHERE tenant_id = ? AND source_sha256 = ?",

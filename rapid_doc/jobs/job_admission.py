@@ -57,7 +57,7 @@ class JobAdmissionService:
     def __init__(self, settings: JobSettings) -> None:
         self.settings = settings
         self.artifacts = ArtifactStore(settings.data_dir)
-        self.store = JobStore(settings.database_path, settings)
+        self.store = JobStore(settings, settings)
         # 单容器第一期用进程内短锁保护磁盘预算的逐块检查与写入。
         self._storage_lock = asyncio.Lock()
         self._initialized = False
@@ -66,7 +66,7 @@ class JobAdmissionService:
         if self._initialized:
             return
         self.artifacts.ensure_layout()
-        initialize_database(self.settings.database_path)
+        initialize_database(self.settings)
         self._initialized = True
 
     async def create_job(

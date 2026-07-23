@@ -25,6 +25,7 @@ from rapid_doc.jobs.job_runtime import (
     JobRuntime,
 )
 from rapid_doc.jobs.job_types import CacheRole, CacheState, JobState
+from tests.unittest.job.test_support import mysql_test_settings
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -40,7 +41,7 @@ class JobApiTest(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
         self.addCleanup(self.temporary_directory.cleanup)
-        self.settings = JobSettings(data_dir=self.root / "jobs", max_pdf_pages=1)
+        self.settings = mysql_test_settings(self.root / "jobs", max_pdf_pages=1)
         self.service = JobAdmissionService(self.settings)
         docker_app.app.state.rapid_doc_job_service = self.service
         self.addCleanup(self._clear_job_service)
@@ -84,7 +85,7 @@ class JobApiTest(unittest.TestCase):
             del docker_app.app.state.rapid_doc_job_service
 
     def assert_no_enqueued_job_or_input(self) -> None:
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             job_count = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
         finally:
@@ -107,7 +108,7 @@ class JobApiTest(unittest.TestCase):
             ).encode("utf-8"),
         )
         relative_path = str(result_path.relative_to(self.settings.data_dir))
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             connection.execute(
                 """
@@ -223,7 +224,7 @@ class JobApiTest(unittest.TestCase):
             files={"file": ("contract.pdf", source, "application/pdf")},
             data={"tenantId": "finance"},
         )
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             connection.execute(
                 """
@@ -358,7 +359,7 @@ class JobApiTest(unittest.TestCase):
         self.assertEqual(succeeded.json()["result"]["metadata"]["sourcePageCount"], 2)
         self.assertTrue(succeeded.json()["result"]["metadata"]["truncated"])
 
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             connection.execute(
                 "UPDATE jobs SET job_state = ? WHERE job_id = ?",

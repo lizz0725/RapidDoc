@@ -58,7 +58,7 @@
 flowchart LR
     B[业务系统] -->|POST /jobs\nfile + tenantId| A[FastAPI API]
     B -->|GET 状态 / 结果| A
-    A -->|写入任务、队列、缓存索引| DB[(SQLite WAL)]
+    A -->|写入任务、队列、缓存索引| DB[(MySQL 8)]
     A -->|保存原始上传文件| FS[(挂载数据目录)]
     W[OCR Worker x N] -->|领取 FIFO 任务| DB
     W -->|读取输入、写入 Markdown| FS
@@ -81,7 +81,7 @@ flowchart LR
 
 `uvicorn --workers` 只会增加 HTTP API 进程，不应拿来提高 OCR 并发。OCR 并发由 `RAPID_DOC_WORKER_PROCESSES` 控制。每增加一个 OCR worker，通常都会多一份模型运行时和部分 PDF 图像内存；CPU 版先固定为 `1`，压测确认资源充足后再提高。
 
-Job Maintenance Worker 不拆成两个 OS 进程，避免在单机 SQLite 部署下增加进程监管和写锁竞争；但内部职责和调度频率保持独立：
+Job Maintenance Worker 不拆成两个 OS 进程，避免增加进程监管和 MySQL 行锁竞争；但内部职责和调度频率保持独立：
 
 | 内部模块 | 职责 | 建议频率 |
 | --- | --- | --- |
@@ -98,7 +98,7 @@ Job Maintenance Worker 不拆成两个 OS 进程，避免在单机 SQLite 部署
 sequenceDiagram
     participant Client as 业务系统
     participant API as FastAPI
-    participant DB as SQLite
+    participant DB as MySQL 8
     participant W as OCR Worker
     participant RD as RapidDoc
     participant CB as Callback Dispatcher
@@ -180,7 +180,7 @@ stateDiagram-v2
 ### 5.3 FIFO、租约和崩溃恢复
 
 - `queueSeq` 是内部单调递增的队列序号，只用于真实 `queued` 任务的领取排序，不是 `jobId`。
-- worker 用短 SQLite 事务按最小 `queueSeq` 把一个 `queued` 任务原子改为 `running`。
+- worker 用短 MySQL 事务和 `FOR UPDATE` 行锁按最小 `queueSeq` 把一个 `queued` 任务原子改为 `running`。
 - worker 定期写入租约心跳。容器或 worker 崩溃后，Job Maintenance Worker 内的 Watchdog 发现租约过期，会将任务重新排队或判定失败。
 - 每次领取生成新的 `attemptToken`。旧 worker 即使在失去租约后才完成，也不能覆盖新 worker 的结果。
 - `RAPID_DOC_WORKER_PROCESSES=1` 时，任务开始顺序严格 FIFO；多 worker 时开始领取仍按 FIFO，但完成顺序不保证 FIFO。
@@ -247,7 +247,6 @@ flowchart TD
 
 ```text
 /app/output/jobs/
-  rapid-doc.db
   staging/{uploadToken}.upload
   inputs/{jobId}/{storedFilename}
   attempts/{jobId}/{attemptToken}/result.json.tmp
@@ -257,7 +256,7 @@ flowchart TD
 
 | 路径 | 存储内容 | 用途 |
 | --- | --- | --- |
-| `rapid-doc.db` | SQLite 数据库文件 | 保存 Job 状态、队列顺序、租约、缓存索引和回调状态等元数据。 |
+| MySQL `rapid_doc` 数据库 | MySQL 元数据表 | 保存 Job 状态、队列顺序、租约、缓存索引和回调状态等元数据；不写入宿主机任务文件目录。 |
 | `staging/{uploadToken}.upload` | 上传过程中的暂存文件 | API 按块写入、计算 SHA-256 并完成类型/大小/PDF 页数校验后，原子移动到对应 Job 的 `inputs` 目录；校验或入队失败时立即删除。T07 再负责清理进程异常遗留的暂存文件。 |
 | `inputs/{jobId}/{storedFilename}` | 该 Job 上传的原始文件副本 | 保留经路径净化后的原始文件名，便于运维人员复核；用于容器重启后的任务恢复，以及 Owner 失败后 Follower 被提升为新 Owner 时继续 OCR。 |
 | `attempts/{jobId}/{attemptToken}/result.json.tmp` | 一次 OCR 尝试产生的临时结果 | OCR 完成后先写入临时文件；进入 `publishing` 时再原子移动到正式缓存目录。崩溃恢复时据此判断结果是否完整。 |
@@ -272,7 +271,7 @@ flowchart TD
 - 缓存结果路径就是 OCR 成功后各个 Job 引用的最终结果路径，不再复制多份 Markdown。
 - Job 的结果查询 TTL 和缓存实体 TTL 逻辑上分开：某个旧 job 的查询可以返回 `410`，而同一共享缓存仍可给后续相同文件创建新的成功 job。
 
-未来替换方式：`JobStore` 从 SQLite 换 MySQL，`CacheStore` 可增加 Redis 索引/锁，`ArtifactStore` 可把上面的本地目录替换为 MinIO；API、缓存键和 Job 状态模型不需要改变。
+未来替换方式：`CacheStore` 可增加 Redis 索引/锁，`ArtifactStore` 可把上面的本地目录替换为 MinIO；API、缓存键和 Job 状态模型不需要改变。
 
 ## 7. 默认解析策略与准入规则
 
@@ -331,7 +330,7 @@ PDF 页数限制只对原始 `pdf` 文件生效。若 PDF 总页数大于 `RAPID
 | --- | ---: | --- |
 | `RAPID_DOC_ASYNC_ENABLED` | `true` | 是否启用 Job API 与后台进程。 |
 | `RAPID_DOC_WORKER_PROCESSES` | `1` | OCR worker OS 进程数量。 |
-| `RAPID_DOC_JOB_DATA_DIR` | `/app/output/jobs` | Job 的 SQLite、上传原文件、临时结果和缓存目录；容器挂载任务数据盘时应保持此值与挂载目标一致。 |
+| `RAPID_DOC_JOB_DATA_DIR` | `/app/output/jobs` | 上传原文件、临时结果和缓存目录；Job 元数据存放在 MySQL，容器挂载任务数据盘时应保持此值与挂载目标一致。 |
 | `RAPID_DOC_MAX_FILE_SIZE_MB` | `100` | 单个上传文件最大真实大小，单位 MB。 |
 | `RAPID_DOC_ALLOWED_EXTENSIONS` | `pdf,doc,docx,xls,xlsx,png,jpg,jpeg,tif,tiff` | Job API 支持的扩展名白名单。 |
 | `RAPID_DOC_MAX_PDF_PAGES` | `100` | 原始 PDF 最多处理前 N 页。 |
@@ -355,15 +354,15 @@ PDF 页数限制只对原始 `pdf` 文件生效。若 PDF 总页数大于 `RAPID
 
 > TODO（后续安全增强，不属于本期）：当前仅校验 `callbackUrl` 的基本 URL 格式；内网部署暂不实现回调域名白名单、CIDR 出站限制、HTTP/HTTPS 限制及 DNS 重绑定防护。对外网、跨网络边界或多租户部署前，必须补齐这些限制。
 
-## 9. SQLite 表设计
+## 9. MySQL 表设计
 
-SQLite 仅存任务元数据、索引、状态和小型回调载荷；上传文件与 Markdown 存文件系统。第一期使用 `WAL`、`foreign_keys=ON`、合理的 `busy_timeout` 和短事务。单机单容器、一个或少量 worker 下，OCR 的秒/分钟级耗时远大于 SQLite 的毫秒级写入，足以满足第一期。
+MySQL 仅存任务元数据、索引、状态和小型回调载荷；上传文件与 Markdown 存文件系统。第一期使用 InnoDB、短事务和行级锁。OCR 的秒/分钟级耗时远大于 MySQL 的毫秒级写入，数据库不会持有 OCR 长事务。
 
 ### 9.1 `jobs`
 
 | 字段 | 类型/约束 | 含义 |
 | --- | --- | --- |
-| `job_id` | `TEXT PRIMARY KEY` | ULID，全局唯一。 |
+| `job_id` | `VARCHAR(26) PRIMARY KEY` | ULID，全局唯一。 |
 | `tenant_id` | `TEXT NOT NULL` | 租户标识。 |
 | `queue_seq` | `INTEGER UNIQUE NULL` | 实际进入 OCR FIFO 时分配的递增序号；缓存命中/follower 初始为空。 |
 | `idempotency_key_hash` | `TEXT NULL` | 可选幂等键哈希。联合租户唯一。 |
@@ -440,7 +439,7 @@ INDEX parse_cache(cache_state, expires_at)
 | `http_status` | `INTEGER NULL` | HTTP 响应码。 |
 | `error_code`、`error_message` | `TEXT NULL` | 网络或非 2xx 错误。 |
 
-只有 `callbackUrl` 非空时才创建 outbox。终态写入和 outbox 创建在同一个 SQLite 事务中，避免“已成功但漏回调”的崩溃窗口。
+只有 `callbackUrl` 非空时才创建 outbox。终态写入和 outbox 创建在同一个 MySQL 事务中，避免“已成功但漏回调”的崩溃窗口。
 
 ### 9.4 `service_heartbeats`
 
@@ -691,7 +690,7 @@ curl -X POST 'http://rapid-doc.internal:8000/jobs' \
 
 回调仅在创建时提供 `callbackUrl` 时发生，任务到达首次业务终态（`succeeded`、`failed`、`cancelled`、`expired`）后投递一次。任意 `2xx` 表示成功；网络错误、超时或非 `2xx` 记为 `failed`，不重试。结果保留期结束的 `result_expired` 不会再发第二次终态回调。
 
-Dispatcher 先在 SQLite 中把 `pending` 原子改为 `dispatching`，再发出 HTTP 请求，因此语义是 **at-most-once**：进程在发出请求后崩溃时，该记录会停留在 `dispatching`，系统不会冒着重复通知的风险自动重试，运维可据此人工核对。设置 `RAPID_DOC_CALLBACK_SIGNING_SECRET` 后使用该密钥对 JSON 原始字节做 HMAC-SHA256；未设置时不发送签名头。
+Dispatcher 先在 MySQL 中把 `pending` 原子改为 `dispatching`，再发出 HTTP 请求，因此语义是 **at-most-once**：进程在发出请求后崩溃时，该记录会停留在 `dispatching`，系统不会冒着重复通知的风险自动重试，运维可据此人工核对。设置 `RAPID_DOC_CALLBACK_SIGNING_SECRET` 后使用该密钥对 JSON 原始字节做 HMAC-SHA256；未设置时不发送签名头。
 
 ```http
 POST /rapid-doc/callback HTTP/1.1
@@ -734,7 +733,7 @@ X-RapidDoc-Signature: v1=<HMAC-SHA256>
 
 ## 12. 结果发布、恢复与清理
 
-OCR 结果先写入 attempt 专属临时路径，再通过状态 CAS 和原子 rename 发布到缓存最终路径。之所以保留 `publishing`，是因为 SQLite 事务与文件系统 rename 无法形成同一个真正的原子事务。
+OCR 结果先写入 attempt 专属临时路径，再通过状态 CAS 和原子 rename 发布到缓存最终路径。之所以保留 `publishing`，是因为 MySQL 事务与文件系统 rename 无法形成同一个真正的原子事务。
 
 恢复规则：
 
@@ -756,7 +755,7 @@ T07 已实现上述数据库与文件收敛：临时 JSON 完整时补写 Markdo
 本期至少提供：
 
 - `GET /health/live`：FastAPI 存活。
-- `GET /health/ready`：SQLite 可用、数据目录可写、worker/dispatcher/maintenance worker 心跳新鲜、容量未满。
+- `GET /health/ready`：MySQL 可用、数据目录可写、worker/dispatcher/maintenance worker 心跳新鲜、容量未满。
 - `GET /ops/jobs/queue`：返回全部真实 OCR 排队任务，按 `queue_seq ASC` 排序。仅返回 `job_state=queued`，不包含 `running`、`waiting_for_result`、缓存命中或终态 Job。
 - 结构化日志：`jobId`、可选 `businessRef`、`queueSeq`、状态变化、worker ID、attempt、排队等待时长、执行时长、缓存命中类型、回调结果。
 
@@ -784,9 +783,9 @@ T07 已实现上述数据库与文件收敛：临时 JSON 完整时补写 Markdo
 
 CPU slim 启动脚本会统一监管 API、Gradio、`RAPID_DOC_WORKER_PROCESSES` 个 OCR Worker、一个 Maintenance Worker 和一个 Callback Dispatcher。任意子进程退出后，启动脚本记录组件名、PID 与退出码，等待一秒后只重启该组件。容器收到 `TERM` 或 `INT` 时会先停止全部子进程，再退出 PID 1 脚本。
 
-三个后台角色会以 `service_heartbeats` 表记录 `running` 心跳。心跳新鲜窗口固定为 `max(60 秒, 3 × RAPID_DOC_JOB_HEARTBEAT_SECONDS)`，不新增额外运维配置。`GET /health/ready` 返回 `200` 的条件是：SQLite 可读写、任务数据目录可写、保留容量未满，且所需数目的 OCR Worker、Maintenance Worker、Callback Dispatcher 均有新鲜 `running` 心跳；任一条件不满足时返回 `503` 与逐项 `checks`。`GET /health/live` 只确认 FastAPI 进程可响应。
+三个后台角色会以 `service_heartbeats` 表记录 `running` 心跳。心跳新鲜窗口固定为 `max(60 秒, 3 × RAPID_DOC_JOB_HEARTBEAT_SECONDS)`，不新增额外运维配置。`GET /health/ready` 返回 `200` 的条件是：MySQL 可读写、任务数据目录可写、保留容量未满，且所需数目的 OCR Worker、Maintenance Worker、Callback Dispatcher 均有新鲜 `running` 心跳；任一条件不满足时返回 `503` 与逐项 `checks`。`GET /health/live` 只确认 FastAPI 进程可响应。
 
-批量取消、按条件筛选、完整任务列表和队列管理页面属于后续运维能力，不阻塞本期核心 Job API。现阶段可以按 `tenant_id + business_ref` 查询 SQLite 或结构化日志排查；本期不提供按 `businessRef` 查询 Job 的业务 API，也不把它作为文件批处理语义。
+批量取消、按条件筛选、完整任务列表和队列管理页面属于后续运维能力，不阻塞本期核心 Job API。现阶段可以按 `tenant_id + business_ref` 查询 MySQL 或结构化日志排查；本期不提供按 `businessRef` 查询 Job 的业务 API，也不把它作为文件批处理语义。
 
 ## 14. 容器与挂载建议
 
@@ -795,14 +794,14 @@ CPU slim 启动脚本会统一监管 API、Gradio、`RAPID_DOC_WORKER_PROCESSES`
 ```text
 /opt/rapid-doc/config/.env
 /opt/rapid-doc/release/                 # 自定义应用代码、SQL、启动脚本
-/data/rapid-doc/jobs/                   # 任务文件、SQLite、结果、缓存
+/data/rapid-doc/jobs/                   # 任务文件、结果、缓存；元数据在 MySQL
 ```
 
 | 宿主机 | 容器 | 用途 |
 | --- | --- | --- |
 | `/opt/rapid-doc/config/.env` | `/app/.env:ro` | 运维配置。 |
 | `/opt/rapid-doc/release` | `/opt/rapid-doc/release:ro` | 自定义应用代码、SQL 和启动脚本。 |
-| `/data/rapid-doc/jobs` | `/app/output/jobs` | SQLite、上传文件、任务结果和缓存。 |
+| `/data/rapid-doc/jobs` | `/app/output/jobs` | 上传文件、任务结果和缓存；MySQL 不挂载到宿主机。 |
 
 容器启动时让自定义代码优先被 Python 发现，并使用挂载目录中的启动脚本：
 
@@ -830,13 +829,13 @@ docker run ... \
 | `rapid_doc/jobs/job_config.py` | `.env` 加载、分钟到内部秒数的转换和配置校验。 |
 | `rapid_doc/jobs/job_admission.py` | 文件准入、落盘、固定策略的 PDF 页数限制。 |
 | `rapid_doc/jobs/job_limits.py` | `JobAdmissionLimits` 常量类：OCR 队列数量和任务数据目录预算。 |
-| `rapid_doc/jobs/job_schema.sql` | SQLite 表、索引和约束。 |
+| `rapid_doc/jobs/job_schema_mysql.sql` | MySQL 8 表、索引和约束。 |
 | `rapid_doc/jobs/job_store.py` | Job、缓存、outbox 的短事务与状态 CAS。 |
 | `rapid_doc/jobs/job_parser.py` | 固定解析策略到既有 RapidDoc `aio_do_parse` 的适配。 |
 | `rapid_doc/jobs/job_worker.py` | FIFO 领取、租约、OCR、发布、owner/follower 提升。 |
 | `rapid_doc/jobs/job_maintenance.py` | 一个后台进程；内部的 Watchdog 处理发布恢复、租约和执行超时状态收敛，Sweeper 处理 TTL、缓存与文件清理。worker 进程重启由 T09 启动监督器负责。 |
 | `rapid_doc/jobs/job_callback.py` | 单次回调、地址校验、签名和状态记录。 |
-| `rapid_doc/jobs/job_runtime.py` | 后台进程心跳、就绪检查和 SQLite/数据目录探测。 |
+| `rapid_doc/jobs/job_runtime.py` | 后台进程心跳、就绪检查和 MySQL/数据目录探测。 |
 | `docker/app.py` | 新 Job API、结果/状态接口、健康接口；`/file_parse` 保持不变。 |
 | `docker/start_api_gradio_cpu_slim.sh` | 统一拉起并监管 API、Gradio、worker、maintenance worker、dispatcher。 |
 
@@ -861,16 +860,15 @@ docker run ... \
 
 ## 17. 演进路线
 
-第一阶段采用 `SQLite + 本地挂载文件系统`，适合当前单机 CPU 私有化环境。后续演进按接口和存储边界替换：
+第一阶段采用 `MySQL 8 + 本地挂载文件系统`，适合当前内网 CPU 私有化环境。后续演进按接口和存储边界替换：
 
 ```mermaid
 flowchart LR
-    A[第一期\nSQLite + 本地 ArtifactStore] --> B[第二期\nMySQL + 本地文件或 MinIO]
+    A[第一期\nMySQL 8 + 本地 ArtifactStore] --> B[第二期\nMySQL + 本地文件或 MinIO]
     B --> C[后续\nRedis 缓存索引/锁 + MinIO]
     C --> D[多节点\n共享数据库 + 对象存储 + 外部队列]
 ```
 
-- MySQL 替换 SQLite：实现同一 `JobStore` 接口，状态机和 `/jobs` API 保持不变。
 - Redis：用于缓存索引、分布式锁、TTL 或队列加速，不应保存大段 Markdown。
 - MinIO：实现 `ArtifactStore`，把输入和结果路径替换成对象键。
 - Excel/Markdown/Text/JSON：后续在 Job API 的准入和处理路由中加入“直接提取”分支，不与 OCR 队列逻辑耦合。
@@ -880,7 +878,7 @@ flowchart LR
 ### 18.1 本期实施范围
 
 - 保持同步 `POST /file_parse` 的行为和响应不变；新增异步 `POST /jobs`、状态查询、结果查询和取消接口。
-- 使用单容器、单机部署形态：SQLite WAL + 挂载的本地任务目录 + 默认 1 个 OCR Worker OS 进程。
+- 使用单容器、单机部署形态：MySQL 8 + 挂载的本地任务目录 + 默认 1 个 OCR Worker OS 进程。
 - 实现持久化 FIFO、租约与心跳、崩溃恢复、执行超时、`publishing` 恢复和任务/缓存文件清理。
 - 实现 `tenantId + SHA-256` 成功缓存、进行中 Owner/Follower 合并、幂等键重试和租户隔离。
 - 支持第一期文件白名单：PDF、Word、Excel 和常见图片；超出 `RAPID_DOC_MAX_FILE_SIZE_MB` 时返回 `413`，原始 PDF 按页数上限截断并给出结构化 warning。
@@ -915,7 +913,7 @@ flowchart LR
 | 顺序 | 子任务 | 前置依赖 | 主要交付 | 完成标准 |
 | --- | --- | --- | --- | --- |
 | T01 | 基线与测试骨架 | 无 | 梳理当前 `docker/app.py`、启动脚本和 `/file_parse` 行为；建立独立测试数据库、临时数据目录和 RapidDoc OCR adapter 的可替换测试桩。 | 原同步接口有回归用例；异步测试不使用真实模型即可运行。 |
-| T02 | 领域模型、配置与数据目录基础设施 | T01 | Job/回调/缓存状态枚举、错误码、ULID、分钟配置校验、固定容量常量、SQLite WAL 初始化、表结构与索引、ArtifactStore 文件读写和原子发布工具。 | 可初始化空数据目录和数据库；配置错误会在启动时失败；输入、临时结果和缓存路径均可安全创建。 |
+| T02 | 领域模型、配置与数据目录基础设施 | T01 | Job/回调/缓存状态枚举、错误码、ULID、分钟配置校验、固定容量常量、MySQL 初始化、表结构与索引、ArtifactStore 文件读写和原子发布工具。 | 可初始化数据库和数据目录；配置错误会在启动时失败；输入、临时结果和缓存路径均可安全创建。 |
 | T03 | JobStore 事务与状态 CAS | T02 | `JobStore` 的短事务：队列序号分配、租户隔离、幂等键、缓存记录、owner/follower 创建、租约和状态 CAS。 | 并发测试下不会重复领取同一任务；同租户同幂等键可返回同一 Job；错误复用返回 `409`。 |
 | T04 | 文件准入与创建 Job API | T02、T03 | `POST /jobs`：流式落盘并计算 SHA-256，校验扩展名、MIME、文件头、大小和 PDF 页数；写入 `storedFilename`、警告和初始状态。 | 合法文件快速返回 `202`；超大小返回 `413`、不支持格式返回 `415`，二者均不入队；原文件名安全保留或按真实格式修正后缀。 |
 | T05 | 查询、结果与取消 API | T03、T04 | `GET /jobs/{jobId}`、`GET /jobs/{jobId}/result`、`POST /jobs/{jobId}/cancel`；动态队列观察字段、租户隔离和统一错误响应。 | 各状态返回设计中的 `200`、`202`、`409`、`410` 或 `404`；只能取消 `queued` / `waiting_for_result`。 |
@@ -930,7 +928,7 @@ flowchart LR
 | 子任务 | 状态 | 已完成内容 |
 | --- | --- | --- |
 | T01 | 已完成 | 同步 `/file_parse` 回归测试与无模型测试桩。 |
-| T02 | 已完成 | Job 配置、SQLite WAL、数据目录与原子文件操作。 |
+| T02 | 已完成 | Job 配置、MySQL Schema、数据目录与原子文件操作。 |
 | T03 | 已完成 | FIFO 队列、幂等键、缓存 owner/follower/hit 与租约 CAS。 |
 | T04 | 已完成 | `POST /jobs`、分块落盘、SHA-256、文件头/MIME/扩展名校验、PDF 页数截断提示、固定磁盘预算和结构化准入错误。 |
 | T05 | 已完成 | 状态、结果、取消三个 Job API；动态队列观察字段与租户隔离；结果 `202/200/409/410` 语义；取消 queued owner 时原子提升最早 follower 或清理 processing 缓存。 |
@@ -956,18 +954,18 @@ flowchart LR
 
 ### 20.4 必须遵守的实施节奏
 
-1. `T01` 至 `T03` 是所有后续能力的基础，不拆开并行修改同一套 SQLite 状态和事务代码。
+1. `T01` 至 `T03` 是所有后续能力的基础，不拆开并行修改同一套 MySQL 状态和事务代码。
 2. `T04` 与 `T05` 先完成 API 契约和可查询状态，再在 `T06` 接入真实 OCR，便于在不加载模型的测试中覆盖大多数边界。
 3. `T06` 是第一个端到端 OCR 里程碑；在它完成前，不交付给业务系统调用新的 `/jobs` 接口。
-4. `T07`、`T08` 可以在 `T06` 稳定后分别开发，但共享 `JobStore` 状态转换，建议仍按本表顺序串行合入，减少 SQLite 写入逻辑冲突。
+4. `T07`、`T08` 可以在 `T06` 稳定后分别开发，但共享 `JobStore` 状态转换，建议仍按本表顺序串行合入，减少 MySQL 写入逻辑冲突。
 5. `T09` 完成后才形成可部署服务；`T10` 是上线前门槛，不以“接口可用”替代重启、离线和性能验证。
 
 ### 20.5 每个子任务的共同约束
 
 - 不修改原有 `POST /file_parse` 的请求、响应与处理路径；每个任务完成时运行其回归用例。
 - 不为当前单机 CPU 版本引入 Redis、MySQL、MinIO 或新的外部基础设施。
-- 任何状态变更均通过 `JobStore`，不允许 API、worker、maintenance worker 直接各自拼写 SQLite 更新语句。
-- 数据库事务保持短小；OCR、文件转换、文件删除和 HTTP 回调均不能持有 SQLite 写锁。
+- 任何状态变更均通过 `JobStore`，不允许 API、worker、maintenance worker 直接各自拼写 MySQL 更新语句。
+- 数据库事务保持短小；OCR、文件转换、文件删除和 HTTP 回调均不能持有 MySQL 行锁。
 - 每个任务独立提交，提交信息说明目的、约束和验证结果；合入下一任务前先通过上一任务的测试。
 
 ## 21. 最终交付状态与验收边界
@@ -987,7 +985,7 @@ T01-T10 均已完成并分别提交。当前分支已形成可供内网单机 CP
 
 ## 22. 最终结论
 
-本设计以“**先稳住 CPU OCR 的并发和资源，再提高吞吐**”为优先级：单 worker、SQLite 持久化 FIFO、可恢复状态机、按租户 SHA-256 缓存和进行中合并，已经能覆盖业务系统并发调用时最重要的资源控制与重复识别问题。
+本设计以“**先稳住 CPU OCR 的并发和资源，再提高吞吐**”为优先级：单 worker、MySQL 持久化 FIFO、可恢复状态机、按租户 SHA-256 缓存和进行中合并，已经能覆盖业务系统并发调用时最重要的资源控制与重复识别问题。
 
 后续开发应按本设计实现后，先在内网 AMD CPU 服务器上使用真实 PDF 压测单 worker 的内存、平均耗时、长文档超时和缓存命中效果，再决定是否提高 `RAPID_DOC_WORKER_PROCESSES` 或迁移 MySQL/MinIO。
 
@@ -998,10 +996,10 @@ T01-T10 已完成。后续工作按以下顺序推进，每项先完成针对性
 | 顺序 | 子任务 | 前置依赖 | 主要交付 | 状态 |
 | --- | --- | --- | --- | --- |
 | P01 | CPU 镜像稳定性收口 | T10 | 延迟导入、容器中国时区、组件异常重启等待配置、配置注释和回归测试。 | 已完成 |
-| P02 | 数据库存储抽象与 MySQL 配置 | P01 | 抽象数据库连接/事务边界，增加 MySQL 连接配置与启动校验，保留 SQLite 本地兼容模式。 | 已完成 |
-| P03 | MySQL 8 JobStore 实现 | P02 | MySQL 8 表结构、索引、事务/CAS、租约、缓存和回调 Outbox 适配；不改变 Job API。 | 进行中 |
-| P04 | MySQL 迁移与双环境测试 | P03 | SQLite 数据迁移工具、MySQL 初始化/升级脚本、并发和故障恢复测试。 | 待开始 |
+| P02 | 数据库存储抽象与 MySQL 配置 | P01 | 抽象数据库连接/事务边界，增加 MySQL 连接配置与启动校验，统一 MySQL 后端。 | 已完成 |
+| P03 | MySQL 8 JobStore 实现 | P02 | MySQL 8 表结构、索引、事务/CAS、租约、缓存和回调 Outbox 适配；不改变 Job API。 | 已完成 |
+| P04 | MySQL 初始化与生产测试 | P03 | MySQL 初始化/升级脚本、并发和故障恢复测试；不再维护 SQLite 双后端迁移。 | 进行中 |
 | P05 | 文件日志与任务耗时可观测性 | P01 | 可挂载的中文滚动日志、Job 排队/执行/总耗时字段及部署说明。 | 待开始 |
 | P06 | 生产环境验收与镜像交付 | P03、P04、P05 | 内网无网络启动、MySQL 连接、重启恢复、缓存命中、日志轮转和目标 AMD CPU 性能基线。 | 待开始 |
 
-P02 和 P03 不会删除现有 SQLite 支持；本地验证继续可使用 SQLite，生产通过配置切换到 MySQL。只有 MySQL 的并发事务、索引和恢复测试通过后，才把生产默认值切换为 MySQL。
+P02 和 P03 已将 Job 元数据统一到 MySQL 8；任务原文件、临时结果和缓存仍保留在本地挂载目录。只有 MySQL 的并发事务、索引和恢复测试通过后，才进入生产镜像重建与部署验收。

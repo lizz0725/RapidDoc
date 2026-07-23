@@ -14,6 +14,7 @@ from rapid_doc.jobs.job_config import JobSettings
 from rapid_doc.jobs.job_database import connect_database, initialize_database
 from rapid_doc.jobs.job_store import JobStore, JobSubmission
 from rapid_doc.jobs.job_types import CacheRole, CacheState, CallbackState, JobState
+from tests.unittest.job.test_support import mysql_test_settings
 
 
 class FixtureSender:
@@ -47,12 +48,11 @@ class JobCallbackTest(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
         self.addCleanup(self.temporary_directory.cleanup)
-        self.settings = JobSettings(
-            data_dir=self.root / "jobs",
+        self.settings = mysql_test_settings(
+            self.root / "jobs",
             callback_signing_secret="fixture-secret",
         )
-        initialize_database(self.settings.database_path)
-        self.store = JobStore(self.settings.database_path, self.settings)
+        self.store = JobStore(self.settings, self.settings)
         self.now = 1_700_000_000
 
     def submission(
@@ -73,7 +73,7 @@ class JobCallbackTest(unittest.TestCase):
         )
 
     def outbox_rows(self) -> list[dict[str, object]]:
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             rows = connection.execute(
                 "SELECT * FROM callback_outbox ORDER BY job_id ASC"
@@ -206,7 +206,7 @@ class JobCallbackTest(unittest.TestCase):
 
     def test_cache_hit_creates_pending_callback_without_reprocessing(self) -> None:
         owner = self.store.create_or_reuse_job(self.submission("d" * 64), now=self.now).job
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             connection.execute(
                 """

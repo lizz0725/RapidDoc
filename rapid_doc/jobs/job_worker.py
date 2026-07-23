@@ -37,12 +37,12 @@ class JobWorker:
     ) -> None:
         self.settings = settings
         self.artifacts = artifacts or ArtifactStore(settings.data_dir)
-        self.store = store or JobStore(settings.database_path, settings)
+        self.store = store or JobStore(settings, settings)
         self.parser = parser or RapidDocParseAdapter()
 
     def initialize(self) -> None:
         self.artifacts.ensure_layout()
-        initialize_database(self.settings.database_path)
+        initialize_database(self.settings)
 
     def run_once(self) -> bool:
         """处理一个 owner；没有可领取任务时返回 False。"""
@@ -146,7 +146,7 @@ class JobWorker:
 
 
 class _LeaseHeartbeat:
-    """解析期间由轻量线程续租，不让耗时 OCR 占用 SQLite 写锁。"""
+    """解析期间由轻量线程续租，不让耗时 OCR 占用 MySQL 行锁。"""
 
     def __init__(
         self, store: JobStore, job_id: str, attempt_token: str, settings: JobSettings

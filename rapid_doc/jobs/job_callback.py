@@ -61,11 +61,11 @@ class CallbackDispatcher:
         sender: CallbackSender | None = None,
     ) -> None:
         self.settings = settings
-        self.store = store or JobStore(settings.database_path, settings)
+        self.store = store or JobStore(settings, settings)
         self.sender = sender or RequestsCallbackSender()
 
     def initialize(self) -> None:
-        initialize_database(self.settings.database_path)
+        initialize_database(self.settings)
 
     def run_once(self) -> bool:
         """投递一条 pending 记录；没有待投递记录时返回 False。"""

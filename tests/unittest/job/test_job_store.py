@@ -15,6 +15,7 @@ from rapid_doc.jobs.job_store import (
     JobSubmission,
 )
 from rapid_doc.jobs.job_types import CacheRole, CacheState, JobState
+from tests.unittest.job.test_support import mysql_test_settings
 
 
 class JobStoreTest(unittest.TestCase):
@@ -22,9 +23,8 @@ class JobStoreTest(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
         self.addCleanup(self.temporary_directory.cleanup)
-        self.settings = JobSettings(data_dir=self.root)
-        initialize_database(self.settings.database_path)
-        self.store = JobStore(self.settings.database_path, self.settings)
+        self.settings = mysql_test_settings(self.root)
+        self.store = JobStore(self.settings, self.settings)
         self.now = 1_700_000_000
 
     def submission(
@@ -63,7 +63,7 @@ class JobStoreTest(unittest.TestCase):
         owner = self.store.create_or_reuse_job(
             self.submission(digest="b" * 64), now=self.now
         )
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             connection.execute(
                 """
@@ -134,7 +134,7 @@ class JobStoreTest(unittest.TestCase):
         self.assertEqual(promoted["cache_role"], CacheRole.OWNER.value)
         self.assertEqual(promoted["queue_seq"], 2)
         self.assertEqual(waiting["job_state"], JobState.WAITING_FOR_RESULT.value)
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             cache = connection.execute(
                 "SELECT owner_job_id FROM parse_cache WHERE tenant_id = ? AND source_sha256 = ?",
@@ -150,7 +150,7 @@ class JobStoreTest(unittest.TestCase):
         cancellation = self.store.cancel_job("finance", owner.job["job_id"], now=self.now + 1)
 
         self.assertTrue(cancellation.cancelled)
-        connection = connect_database(self.settings.database_path)
+        connection = connect_database(self.settings)
         try:
             cache = connection.execute(
                 "SELECT 1 FROM parse_cache WHERE tenant_id = ? AND source_sha256 = ?",

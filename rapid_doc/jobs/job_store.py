@@ -1,22 +1,20 @@
 """异步 Job 状态的事务化持久层。
 
 Job 子系统中只有本模块可以执行改变状态的 SQL。OCR、回调和维护操作必须在这里的
-短事务之外执行，避免长时间持有 SQLite 写锁。
+短事务之外执行，避免长时间持有 MySQL 行锁。
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from .job_config import JobSettings
-from .job_database import connect_database
+from .job_database import DatabaseConnection, connect_database
 from .job_limits import JobAdmissionLimits
 from .job_types import CallbackState, CacheRole, CacheState, JobState, generate_ulid
 
@@ -86,8 +84,8 @@ _CALLBACK_TERMINAL_STATES = frozenset(
 
 
 class JobStore:
-    def __init__(self, database_path: Path, settings: JobSettings) -> None:
-        self.database_path = database_path
+    def __init__(self, database_config: JobSettings, settings: JobSettings) -> None:
+        self.database_config = database_config
         self.settings = settings
 
     def create_or_reuse_job(
@@ -104,7 +102,7 @@ class JobStore:
             else None
         )
 
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             if idempotency_key_hash is not None:
@@ -217,7 +215,7 @@ class JobStore:
             connection.close()
 
     def get_job(self, tenant_id: str, job_id: str) -> dict[str, Any] | None:
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             row = self._select_job(connection, tenant_id, job_id)
             return dict(row) if row is not None else None
@@ -227,7 +225,7 @@ class JobStore:
     def get_job_status(self, tenant_id: str, job_id: str) -> dict[str, Any] | None:
         """读取任务及瞬时队列观察值，不对排队位置作预约承诺。"""
 
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             row = self._select_job(connection, tenant_id, job_id)
             if row is None:
@@ -261,7 +259,7 @@ class JobStore:
     def get_queue_snapshot(self) -> dict[str, Any]:
         """返回运维接口所需的真实 OCR FIFO 快照，不混入 follower 或终态任务。"""
 
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             rows = connection.execute(
                 """
@@ -298,7 +296,7 @@ class JobStore:
         """取消未开始任务；取消 owner 时把最早 follower 原子提升为新 owner。"""
 
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = self._select_job(connection, tenant_id, job_id)
@@ -349,7 +347,7 @@ class JobStore:
         self, attempt_token: str, now: int | None = None
     ) -> dict[str, Any] | None:
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -358,6 +356,7 @@ class JobStore:
                 WHERE job_state = ? AND cache_role = ?
                 ORDER BY queue_seq ASC
                 LIMIT 1
+                FOR UPDATE
                 """,
                 (JobState.QUEUED.value, CacheRole.OWNER.value),
             ).fetchone()
@@ -404,7 +403,7 @@ class JobStore:
         self, job_id: str, attempt_token: str, now: int | None = None
     ) -> bool:
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             updated = connection.execute(
                 """
@@ -438,7 +437,7 @@ class JobStore:
         """发布共享结果，并在同一事务中完成 owner 与所有 follower。"""
 
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             owner = connection.execute(
@@ -547,7 +546,7 @@ class JobStore:
         """将解析失败的 owner 收敛为终态，并提升一个等待者或清理 processing 缓存。"""
 
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -595,7 +594,7 @@ class JobStore:
         """处理失去租约的 running owner，重新排队或在达到上限后失败。"""
 
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
@@ -660,7 +659,7 @@ class JobStore:
 
         now = _current_timestamp() if now is None else now
         deadline = now - self.settings.max_run_seconds
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
@@ -706,7 +705,7 @@ class JobStore:
     def list_publishing_jobs(self) -> list[dict[str, Any]]:
         """列出需要由维护进程检查落盘结果的发布中 owner。"""
 
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             rows = connection.execute(
                 """
@@ -729,7 +728,7 @@ class JobStore:
         """发布文件不完整时收敛 attempt：可重试则重排，否则提升 follower。"""
 
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -798,7 +797,7 @@ class JobStore:
 
         now = _current_timestamp() if now is None else now
         deadline = now - self.settings.queue_expire_seconds
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             follower_rows = connection.execute(
@@ -870,7 +869,7 @@ class JobStore:
         """让成功 Job 停止对外提供结果，但不抢先删除仍可能被引用的缓存。"""
 
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             updated = connection.execute(
                 """
@@ -893,7 +892,7 @@ class JobStore:
         """删除没有活跃成功 Job 引用的过期缓存记录，返回待删文件坐标。"""
 
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         removed: list[dict[str, str]] = []
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -946,7 +945,7 @@ class JobStore:
         """删除不再被缓存记录引用的终态 Job，返回可清理输入与 attempt 目录的 ID。"""
 
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
@@ -972,7 +971,7 @@ class JobStore:
         """领取一条待投递回调，并在发起网络请求前永久标记为 dispatching。"""
 
         now = _current_timestamp() if now is None else now
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -1027,7 +1026,7 @@ class JobStore:
         """记录唯一一次回调的最终结果；dispatching 记录不会被重复投递。"""
 
         state = CallbackState.DELIVERED if delivered else CallbackState.FAILED
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             updated = connection.execute(
                 """
@@ -1073,7 +1072,7 @@ class JobStore:
             where_parts.append("active_attempt_token = ?")
             parameters.append(attempt_token)
 
-        connection = connect_database(self.database_path)
+        connection = connect_database(self.database_config)
         try:
             updated = connection.execute(
                 f"UPDATE jobs SET {', '.join(assignments)} WHERE {' AND '.join(where_parts)}",
@@ -1083,7 +1082,7 @@ class JobStore:
         finally:
             connection.close()
 
-    def _ensure_queue_capacity(self, connection: sqlite3.Connection) -> None:
+    def _ensure_queue_capacity(self, connection: DatabaseConnection) -> None:
         queued_count = connection.execute(
             "SELECT COUNT(*) FROM jobs WHERE job_state = ?", (JobState.QUEUED.value,)
         ).fetchone()[0]
@@ -1091,7 +1090,7 @@ class JobStore:
             raise QueueCapacityError("the OCR queue is at capacity")
 
     def _promote_follower_or_clear_cache(
-        self, connection: sqlite3.Connection, owner: dict[str, Any], now: int
+        self, connection: DatabaseConnection, owner: dict[str, Any], now: int
     ) -> None:
         follower = connection.execute(
             """
@@ -1156,7 +1155,7 @@ class JobStore:
 
     @staticmethod
     def _enqueue_terminal_callback(
-        connection: sqlite3.Connection, job_id: str, now: int
+        connection: DatabaseConnection, job_id: str, now: int
     ) -> None:
         """在 Job 终态所在的同一事务内创建唯一 outbox 记录。"""
 
@@ -1200,8 +1199,8 @@ class JobStore:
 
     @staticmethod
     def _select_job(
-        connection: sqlite3.Connection, tenant_id: str, job_id: str
-    ) -> sqlite3.Row | None:
+        connection: DatabaseConnection, tenant_id: str, job_id: str
+    ) -> Any | None:
         return connection.execute(
             """
             SELECT jobs.*, callback_outbox.callback_state
@@ -1213,17 +1212,17 @@ class JobStore:
         ).fetchone()
 
     @staticmethod
-    def _next_queue_seq(connection: sqlite3.Connection) -> int:
+    def _next_queue_seq(connection: DatabaseConnection) -> int:
         connection.execute(
-            "UPDATE job_queue_sequence SET last_value = last_value + 1 WHERE sequence_name = 'ocr'"
+            "UPDATE job_queue_sequence SET sequence_value = sequence_value + 1 WHERE sequence_name = 'ocr'"
         )
         return connection.execute(
-            "SELECT last_value FROM job_queue_sequence WHERE sequence_name = 'ocr'"
+            "SELECT sequence_value FROM job_queue_sequence WHERE sequence_name = 'ocr'"
         ).fetchone()[0]
 
     @staticmethod
     def _insert_job(
-        connection: sqlite3.Connection,
+        connection: DatabaseConnection,
         *,
         job_id: str,
         submission: JobSubmission,

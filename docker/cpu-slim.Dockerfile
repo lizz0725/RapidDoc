@@ -34,7 +34,7 @@ COPY rapid_doc /app/rapid_doc
 
 RUN python3 -m pip install --upgrade pip setuptools wheel --break-system-packages && \
     python3 -m pip install --no-cache-dir --prefer-binary --break-system-packages \
-        '.[cpu,api,gradio]' && \
+        '.[cpu,api,gradio,mysql]' && \
     python3 -m pip cache purge
 
 ENV PYTHONPATH=/app

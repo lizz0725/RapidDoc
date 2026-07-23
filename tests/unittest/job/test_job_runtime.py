@@ -13,6 +13,7 @@ from rapid_doc.jobs.job_runtime import (
     OCR_WORKER_COMPONENT,
     JobRuntime,
 )
+from tests.unittest.job.test_support import mysql_test_settings
 
 
 class JobRuntimeTest(unittest.TestCase):
@@ -20,7 +21,7 @@ class JobRuntimeTest(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
         self.addCleanup(self.temporary_directory.cleanup)
-        self.settings = JobSettings(data_dir=self.root / "jobs", worker_processes=2)
+        self.settings = mysql_test_settings(self.root / "jobs", worker_processes=2)
         self.runtime = JobRuntime(self.settings)
         self.now = 1_700_000_000
 
@@ -48,7 +49,9 @@ class JobRuntimeTest(unittest.TestCase):
         self.assertEqual(stale["checks"]["components"][OCR_WORKER_COMPONENT]["healthy"], 0)
 
     def test_disabled_async_jobs_do_not_require_background_component_heartbeats(self) -> None:
-        runtime = JobRuntime(JobSettings(data_dir=self.root / "disabled", async_enabled=False))
+        runtime = JobRuntime(
+            mysql_test_settings(self.root / "disabled", async_enabled=False)
+        )
 
         report = runtime.readiness(now=self.now)
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +11,7 @@ from rapid_doc.jobs.job_config import JobSettings
 from rapid_doc.jobs.job_database import connect_database, initialize_database
 from rapid_doc.jobs.job_limits import JobAdmissionLimits
 from rapid_doc.jobs.job_types import generate_ulid
+from tests.unittest.job.test_support import mysql_test_settings
 
 
 class JobFoundationTest(unittest.TestCase):
@@ -35,7 +35,7 @@ class JobFoundationTest(unittest.TestCase):
         )
         self.assertEqual(custom_directory.data_dir, Path("/data/rapid-doc/jobs"))
 
-    def test_mysql_settings_are_parsed_without_being_used_by_sqlite(self) -> None:
+    def test_mysql_settings_are_parsed(self) -> None:
         settings = JobSettings.from_env(
             {
                 "RAPID_DOC_DB_BACKEND": "mysql",
@@ -55,11 +55,10 @@ class JobFoundationTest(unittest.TestCase):
         self.assertEqual(settings.mysql_user, "rapid_doc_app")
         self.assertEqual(settings.mysql_password, "secret")
         self.assertEqual(settings.mysql_pool_size, 8)
-        with self.assertRaisesRegex(RuntimeError, "MySQL 存储尚未启用"):
-            _ = settings.database_path
+        self.assertEqual(settings.database_backend, "mysql")
 
     def test_unknown_database_backend_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "must be sqlite or mysql"):
+        with self.assertRaisesRegex(ValueError, "must be mysql"):
             JobSettings.from_env({"RAPID_DOC_DB_BACKEND": "postgres"})
 
     def test_settings_reject_incompatible_timing_configuration(self) -> None:
@@ -88,32 +87,34 @@ class JobFoundationTest(unittest.TestCase):
         self.assertLess(earlier, later)
         self.assertNotEqual(earlier, generate_ulid(timestamp_ms=1_700_000_000_000))
 
-    def test_database_uses_wal_and_creates_required_tables_and_indexes(self) -> None:
-        database_path = self.root / "jobs" / "rapid-doc.db"
-        initialize_database(database_path)
-
-        connection = connect_database(database_path)
+    def test_database_creates_required_tables_and_indexes(self) -> None:
+        settings = mysql_test_settings(self.root / "jobs")
+        connection = connect_database(settings)
         try:
-            journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
             tables = {
-                row[0]
+                row["TABLE_NAME"]
                 for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    "SELECT TABLE_NAME FROM information_schema.TABLES "
+                    "WHERE TABLE_SCHEMA = DATABASE()"
                 )
             }
             indexes = {
-                row[0]
+                row["INDEX_NAME"]
                 for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'index'"
+                    "SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA = DATABASE()"
                 )
             }
             job_columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(jobs)")
+                row["COLUMN_NAME"]
+                for row in connection.execute(
+                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'jobs'"
+                )
             }
         finally:
             connection.close()
 
-        self.assertEqual(journal_mode, "wal")
         self.assertTrue({"jobs", "parse_cache", "callback_outbox", "service_heartbeats"} <= tables)
         self.assertIn("jobs_tenant_idempotency_key_unique", indexes)
         self.assertIn("parse_cache_state_expires_at_index", indexes)

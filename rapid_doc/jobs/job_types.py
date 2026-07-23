@@ -8,7 +8,7 @@ from enum import Enum
 
 
 class TextEnum(str, Enum):
-    """可直接保存到 SQLite 和 JSON 的字符串枚举。"""
+    """可直接保存到 MySQL 和 JSON 的字符串枚举。"""
 
     def __str__(self) -> str:
         return self.value

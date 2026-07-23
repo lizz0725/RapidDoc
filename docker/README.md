@@ -87,7 +87,7 @@ release 目录内可覆盖 `app.py`、自定义模块、SQL 和启动脚本；�
 | --- | ---: | --- |
 | `RAPID_DOC_ASYNC_ENABLED` | `true` | 是否启用新增的 `/jobs` API 和后台进程。 |
 | `RAPID_DOC_WORKER_PROCESSES` | `1` | OCR OS 进程数，不等同于 Uvicorn worker 数。 |
-| `RAPID_DOC_JOB_DATA_DIR` | `/app/output/jobs` | SQLite、原文件、临时结果与缓存目录。 |
+| `RAPID_DOC_JOB_DATA_DIR` | `/app/output/jobs` | 原文件、临时结果与缓存目录；Job 元数据存放在 MySQL。 |
 | `RAPID_DOC_MAX_FILE_SIZE_MB` | `100` | 单个上传文件大小上限，单位 MB。 |
 | `RAPID_DOC_ALLOWED_EXTENSIONS` | `pdf,doc,docx,xls,xlsx,png,jpg,jpeg,tif,tiff` | Job 上传白名单。 |
 | `RAPID_DOC_MAX_PDF_PAGES` | `100` | PDF 最多处理前 N 页。 |
