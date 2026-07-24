@@ -53,7 +53,7 @@ RUN python3 download_models_cpu_slim.py
 
 COPY docker/.env.example /app/
 COPY docker/app.py docker/file_converter.py /app/
-COPY docker/patch_cpu_slim_defaults.py docker/start_api_gradio_cpu_slim.sh /app/
+COPY docker/patch_cpu_slim_defaults.py docker/start_api_gradio_cpu_slim.sh docker/unified_log_writer.py /app/
 COPY docker/vendor /app/vendor
 
 RUN sed -i 's/\r$//' /app/start_api_gradio_cpu_slim.sh && \

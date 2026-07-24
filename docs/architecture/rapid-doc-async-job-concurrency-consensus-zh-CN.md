@@ -760,7 +760,7 @@ T07 已实现上述数据库与文件收敛：临时 JSON 完整时补写 Markdo
 - `GET /health/live`：FastAPI 存活。
 - `GET /health/ready`：MySQL 可用、数据目录可写、worker/dispatcher/maintenance worker 心跳新鲜、容量未满。
 - `GET /ops/jobs/queue`：返回全部真实 OCR 排队任务，按 `queue_seq ASC` 排序。仅返回 `job_state=queued`，不包含 `running`、`waiting_for_result`、缓存命中或终态 Job。
-- 结构化日志：`jobId`、可选 `businessRef`、`queueSeq`、状态变化、worker ID、attempt、排队等待时长、执行时长、缓存命中类型、回调结果。容器同时将各进程日志写入 `RAPID_DOC_LOG_DIR`，默认是 `/app/output/jobs/logs`，按 100MB 轮转并保留 15 天。
+- 结构化日志：`jobId`、可选 `businessRef`、`queueSeq`、状态变化、worker ID、attempt、排队等待时长、执行时长、缓存命中类型、回调结果。容器启动脚本统一收集 API、Gradio、OCR Worker、维护进程和回调进程的 stdout/stderr，并写入 `RAPID_DOC_LOG_DIR`，默认是 `/app/output/jobs/logs`。文件按日期命名为 `rapid-doc-YYYY-MM-DD.log`；当天超过 `RAPID_DOC_LOG_MAX_BYTES` 后继续写入 `rapid-doc-YYYY-MM-DD.1.log`、`rapid-doc-YYYY-MM-DD.2.log`，历史日志按 `RAPID_DOC_LOG_RETENTION_DAYS` 清理，默认保留 15 天。
 
 `GET /ops/jobs/queue` 不接受 `tenantId`，必须只通过运维网关或受控内网暴露，不能直接提供给业务调用方。当前固定队列上限为 100，因此第一期不分页。响应保持精简：
 

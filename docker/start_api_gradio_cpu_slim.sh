@@ -17,6 +17,14 @@ export GRADIO_SERVER_PORT="${GRADIO_SERVER_PORT:-7860}"
 export LOG_LEVEL="${LOG_LEVEL:-INFO}"
 export RAPID_DOC_JOB_DATA_DIR="${RAPID_DOC_JOB_DATA_DIR:-/app/output/jobs}"
 export RAPID_DOC_COMPONENT_RESTART_DELAY_SECONDS="${RAPID_DOC_COMPONENT_RESTART_DELAY_SECONDS:-60}"
+export RAPID_DOC_UNIFIED_STDOUT_LOGGING="${RAPID_DOC_UNIFIED_STDOUT_LOGGING:-true}"
+
+case "${RAPID_DOC_UNIFIED_STDOUT_LOGGING,,}" in
+    1|true|yes|on)
+        export PYTHONUNBUFFERED=1
+        exec > >(python3 /app/unified_log_writer.py) 2>&1
+        ;;
+esac
 
 if [ -f "/opt/rapid-doc/release/app.py" ]; then
     APP_PATH="/opt/rapid-doc/release/app.py"

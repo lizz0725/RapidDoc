@@ -17,11 +17,19 @@ def configure_file_logging(data_dir: str | Path | None = None) -> None:
     global _configured
     if _configured:
         return
+    if os.environ.get("RAPID_DOC_UNIFIED_STDOUT_LOGGING", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        _configured = True
+        return
     root = Path(data_dir or os.environ.get("RAPID_DOC_JOB_DATA_DIR", "/app/output/jobs"))
     log_dir = Path(os.environ.get("RAPID_DOC_LOG_DIR", str(root / "logs")))
     log_dir.mkdir(parents=True, exist_ok=True)
     logger.add(
-        log_dir / f"rapid-doc-{os.getpid()}.log",
+        log_dir / "rapid-doc-{time:YYYY-MM-DD}.log",
         rotation="100 MB",
         retention="15 days",
         encoding="utf-8",

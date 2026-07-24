@@ -90,7 +90,10 @@ release 目录内可覆盖 `app.py`、自定义模块、SQL 和启动脚本；�
 | `RAPID_DOC_ASYNC_ENABLED` | `true` | 是否启用新增的 `/jobs` API 和后台进程。 |
 | `RAPID_DOC_WORKER_PROCESSES` | `1` | OCR OS 进程数，不等同于 Uvicorn worker 数。 |
 | `RAPID_DOC_JOB_DATA_DIR` | `/app/output/jobs` | 原文件、临时结果与缓存目录；Job 元数据存放在 MySQL。 |
-| `RAPID_DOC_LOG_DIR` | `/app/output/jobs/logs` | 各组件中文文件日志目录，随 Job 数据目录挂载时会落到宿主机；日志按 100MB 轮转并保留 15 天。 |
+| `RAPID_DOC_LOG_DIR` | `/app/output/jobs/logs` | 统一日志目录，随 Job 数据目录挂载时会落到宿主机。 |
+| `RAPID_DOC_UNIFIED_STDOUT_LOGGING` | `true` | 是否把 API、Gradio、OCR Worker、维护进程和回调进程的 stdout/stderr 汇总到同一组文件日志。 |
+| `RAPID_DOC_LOG_MAX_BYTES` | `104857600` | 单个日志文件最大字节数，默认 100MB。 |
+| `RAPID_DOC_LOG_RETENTION_DAYS` | `15` | 日志保留天数，默认 15 天。 |
 | `RAPID_DOC_DB_BACKEND` | `mysql` | Job 元数据后端；当前生产化版本只支持 MySQL。 |
 | `RAPID_DOC_MYSQL_HOST` | `127.0.0.1` | MySQL 8 服务地址。 |
 | `RAPID_DOC_MYSQL_PORT` | `3306` | MySQL 8 服务端口。 |
@@ -115,12 +118,14 @@ curl http://localhost:8888/health/ready
 
 容器刚启动时，`/health/ready` 可能短暂返回 `503`，直到 OCR Worker、维护进程和回调分发器都写入心跳。返回 `200` 后才应接入流量。已构建完成的镜像可在无外网环境中运行；若业务方提交了 `callbackUrl`，该回调地址仍需要在部署网络中可达。
 
-查看后台组件文件日志：
+查看容器内所有组件的统一文件日志：
 
 ```bash
 ls -lh /data/rapid-doc/jobs/logs
 tail -f /data/rapid-doc/jobs/logs/rapid-doc-*.log
 ```
+
+日志默认写入 `rapid-doc-YYYY-MM-DD.log`。如果当天日志超过 100MB，会继续写入 `rapid-doc-YYYY-MM-DD.1.log`、`rapid-doc-YYYY-MM-DD.2.log`；超过 15 天的历史日志会在容器运行期间自动清理。
 
 ## 服务端口
 
