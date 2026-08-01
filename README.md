@@ -582,6 +582,49 @@ for output in outputs:
  </picture>
 </a>
 
+## 🔧 本分支定制内容
+
+本分支在 RapidDoc 上游版本基础上做了以下扩展：
+
+### 异步文档解析任务系统 (`rapid_doc/jobs/`)
+
+面向业务系统集成场景，新增异步 Job 子系统，将同步 OCR 改造为持久化、可观测、可恢复的异步处理流水线：
+
+| 能力 | 说明 |
+|------|------|
+| **FIFO 任务队列** | 基于 MySQL 持久化存储，支持单 Worker/多 Worker 串行消费，容器重启后可恢复 |
+| **任务状态机** | `queued` → `waiting_for_result` → `running` → `publishing` → `succeeded` / `failed` / `cancelled` / `expired` |
+| **内容缓存** | 按 `租户 + SHA256(文件字节)` 去重，支持 owner/follower/hit 三级缓存角色，相同文件不重复解析 |
+| **RESTful Job API** | `POST /jobs`（创建）、`GET /jobs/{id}`（查询）、`POST /jobs/{id}/cancel`（取消）、`GET /jobs/{id}/result`（获取结果） |
+| **幂等提交** | 通过 `Idempotency-Key` 请求头支持调用超时安全重试 |
+| **终态回调** | 任务终态时向业务方配置的 `callbackUrl` 发送 HTTP POST，支持 HMAC 签名校验 |
+| **故障恢复** | 心跳续租 + Watchdog + 定时维护，自动检测 Worker 崩溃、回收超时任务 |
+| **准入校验** | 文件类型/大小/扩展名/PDF 页数白名单校验，可配置 |
+
+### 容器化生产部署 (`docker/`)
+
+| 能力 | 说明 |
+|------|------|
+| **CPU-slim 镜像** | 离线私有化部署镜像，模型内嵌无需运行时下载 |
+| **多进程编排** | 单容器内同时运行 FastAPI、Gradio、OCR Worker、维护进程、回调分发器 |
+| **统一日志** | 所有组件日志按日期轮转写入，支持自动清理 |
+| **多架构** | 支持 AMD64 / ARM 镜像构建与离线交付 |
+
+### 设计文档 (`docs/`)
+
+- [异步任务并发控制与结果缓存设计](docs/architecture/rapid-doc-async-job-concurrency-consensus-zh-CN.md)
+- [Job API 接口参考](docs/job-api-reference.md)
+
+### 应用场景
+
+适用于企业内部系统集成 —— 业务系统通过异步 API 批量提交文档解析任务，RapidDoc 统一调度 FIFO 消费，解决原同步 `/file_parse` 接口的并发瓶颈和任务可靠性问题。典型场景：
+
+- 合同/票据/报告的批量化文档数字化
+- 企业内部知识库文档导入管线
+- 离线私有化环境下的文档解析服务
+
+> 原有同步接口 `/file_parse` 保持不变，异步 Job API 作为独立能力层叠加。
+
 ## ⚖️ 开源许可
 
 该项目采用 [Apache 2.0 license](LICENSE) 开源许可证。

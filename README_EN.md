@@ -127,6 +127,49 @@ RapidDoc is evaluated on OmniDocBench v1.6 using a pipeline with PP-DocLayoutV3,
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
 - [RapidOCR](https://github.com/RapidAI/RapidOCR)
 
+## Branch Customizations
+
+This branch extends upstream RapidDoc with the following additions:
+
+### Async Document Parsing Job System (`rapid_doc/jobs/`)
+
+A production-grade async job subsystem for business system integration, turning synchronous OCR into a durable, observable, and recoverable processing pipeline:
+
+| Feature | Description |
+|------|------|
+| **FIFO Job Queue** | MySQL-backed persistent queue with single/multi-worker serial consumption; survives container restarts |
+| **Job State Machine** | `queued` → `waiting_for_result` → `running` → `publishing` → `succeeded` / `failed` / `cancelled` / `expired` |
+| **Content Cache** | Deduplication by `tenant + SHA256(file bytes)` with owner/follower/hit cache roles; identical files skip re-parsing |
+| **RESTful Job API** | `POST /jobs` (create), `GET /jobs/{id}` (status), `POST /jobs/{id}/cancel`, `GET /jobs/{id}/result` |
+| **Idempotency** | `Idempotency-Key` header support for safe retry on timeout |
+| **Callback** | One-shot HTTP POST to `callbackUrl` on terminal state, with optional HMAC signing |
+| **Crash Recovery** | Lease heartbeat + watchdog + periodic sweeper for automatic worker crash detection and orphan recovery |
+| **Admission Control** | Configurable file type/size/extension/PDF page count whitelist validation |
+
+### Containerized Production Deployment (`docker/`)
+
+| Feature | Description |
+|------|------|
+| **CPU-slim Image** | Offline air-gapped deployment image with embedded models |
+| **Multi-process Orchestration** | Single container runs FastAPI, Gradio, OCR Worker, maintenance, and callback dispatcher |
+| **Unified Logging** | Date-rotated log files for all components with auto-cleanup |
+| **Multi-arch** | AMD64 / ARM image builds and offline delivery |
+
+### Design Docs (`docs/`)
+
+- [Async Job Concurrency & Cache Design](docs/architecture/rapid-doc-async-job-concurrency-consensus-zh-CN.md) (Chinese)
+- [Job API Reference](docs/job-api-reference.md)
+
+### Use Cases
+
+Designed for enterprise internal system integration — business systems submit document parsing jobs via the async API, and RapidDoc processes them serially through the FIFO queue, solving the concurrency bottleneck and reliability issues of the original synchronous `/file_parse` endpoint. Typical scenarios:
+
+- Batch digitization of contracts, invoices, and reports
+- Enterprise knowledge base document ingestion pipelines
+- Offline air-gapped document parsing services
+
+> The original synchronous `/file_parse` endpoint remains unchanged; the async Job API is layered as an independent capability.
+
 ## License
 
 This project is released under the [Apache 2.0 license](LICENSE).
