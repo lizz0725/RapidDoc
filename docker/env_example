@@ -1,0 +1,112 @@
+# RapidDoc Docker 配置示例
+# 复制此文件为 .env 并根据需要修改参数
+
+# =============================================================================
+# 端口配置
+# =============================================================================
+
+# API 服务端口
+API_PORT=8888
+
+# =============================================================================
+# 高级配置
+# =============================================================================
+
+# 健康检查间隔（秒）
+HEALTH_CHECK_INTERVAL=30
+
+# 启动等待时间（秒）
+STARTUP_WAIT_TIME=15
+
+# 后台组件异常退出后的重启等待时间（秒）；避免 native 推理库崩溃后立即反复拉起
+RAPID_DOC_COMPONENT_RESTART_DELAY_SECONDS=60
+
+# 日志级别: DEBUG, INFO, WARNING, ERROR
+LOG_LEVEL=INFO
+
+# Job 文件日志目录；默认位于 RAPID_DOC_JOB_DATA_DIR/logs，可随任务目录一起挂载；日志保留 15 天
+RAPID_DOC_LOG_DIR=/app/output/jobs/logs
+
+# 是否由启动脚本统一收集所有组件 stdout/stderr；开启后不再生成 rapid-doc-{pid}.log
+RAPID_DOC_UNIFIED_STDOUT_LOGGING=true
+
+# 单个日志文件最大字节数；默认 100MB，超过后按 rapid-doc-YYYY-MM-DD.N.log 切分
+RAPID_DOC_LOG_MAX_BYTES=104857600
+
+# 日志保留天数；默认 15 天
+RAPID_DOC_LOG_RETENTION_DAYS=15
+
+# 容器内应用日志使用的时区；默认使用中国时区
+TZ=Asia/Shanghai
+
+# =============================================================================
+# 异步 Job 配置
+# =============================================================================
+
+# 是否启用 /jobs 异步接口及后台进程
+RAPID_DOC_ASYNC_ENABLED=true
+
+# OCR OS 进程数；CPU 部署默认一个，增加会显著增加内存与 CPU 占用
+RAPID_DOC_WORKER_PROCESSES=1
+
+# 上传原文件、OCR 结果和缓存所在目录；Job 元数据存放在 MySQL
+RAPID_DOC_JOB_DATA_DIR=/app/output/jobs
+
+# MySQL 8 数据库后端
+RAPID_DOC_DB_BACKEND=mysql
+
+# MySQL 8 连接配置；异步 Job 元数据只使用 MySQL，不再维护 SQLite 后端
+# 使用 --network host 部署时可写 127.0.0.1；生产环境也可改为内网 MySQL 地址和独立账号
+RAPID_DOC_MYSQL_HOST=127.0.0.1
+RAPID_DOC_MYSQL_PORT=3306
+RAPID_DOC_MYSQL_DATABASE=rapid_doc
+RAPID_DOC_MYSQL_USER=root
+RAPID_DOC_MYSQL_PASSWORD=
+RAPID_DOC_MYSQL_POOL_SIZE=5
+
+# 单个上传文件的最大大小（MB）
+RAPID_DOC_MAX_FILE_SIZE_MB=100
+
+# 支持的文件后缀，逗号分隔
+RAPID_DOC_ALLOWED_EXTENSIONS=pdf,doc,docx,xls,xlsx,png,jpg,jpeg,tif,tiff
+
+# PDF 最大识别页数；仅对 PDF 生效，超过后只处理前 N 页并在 Job 状态中记录截断提醒
+RAPID_DOC_MAX_PDF_PAGES=100
+
+# 等待队列中 Job 的有效期（分钟）；超过后未开始处理的任务会被标记为过期
+RAPID_DOC_QUEUE_EXPIRE_MINUTES=43200
+
+# Job 结果文件保留时间（分钟）；到期后会清理 attempts 中的结果文件，并保留必要状态摘要
+RAPID_DOC_RESULT_TTL_MINUTES=10080
+
+# OCR 缓存保留时间（分钟）；同一 tenantId + 文件 SHA-256 命中缓存时可跳过重复识别
+RAPID_DOC_CACHE_TTL_MINUTES=43200
+
+# 单个 Job 最大执行时长（分钟）；超过后由维护进程判定为异常并中断后续等待
+RAPID_DOC_JOB_MAX_RUN_MINUTES=60
+
+# Worker 持有 Job 的内部租约时长（秒）；Worker 异常退出后，租约过期才会被重新投递
+RAPID_DOC_JOB_LEASE_SECONDS=60
+
+# Worker 续租心跳间隔（秒）；必须小于 RAPID_DOC_JOB_LEASE_SECONDS
+RAPID_DOC_JOB_HEARTBEAT_SECONDS=30
+
+# WatchDog 检查间隔（秒）；用于恢复租约过期、执行超时等异常 Job
+RAPID_DOC_MAINTENANCE_WATCHDOG_INTERVAL_SECONDS=10
+
+# Sweeper 清理间隔（秒）；用于清理过期结果、缓存和历史任务文件
+RAPID_DOC_MAINTENANCE_SWEEPER_INTERVAL_SECONDS=60
+
+# 回调连接超时（秒）；只限制建立 TCP/HTTP 连接的等待时间
+RAPID_DOC_CALLBACK_CONNECT_TIMEOUT_SECONDS=5
+
+# 回调读取超时（秒）；连接成功后等待业务方返回响应内容的最长时间
+RAPID_DOC_CALLBACK_READ_TIMEOUT_SECONDS=30
+
+# 可选：设置后会使用 HMAC-SHA256 签名回调请求；内网一期可留空
+# RAPID_DOC_CALLBACK_SIGNING_SECRET=
+
+# paddleocr-vl 模型配置
+#PADDLEOCRVL_VERSION=v1.5
+#PADDLEOCRVL_VL_REC_BACKEND=vllm-server
+#PADDLEOCRVL_VL_VL_REC_SERVER_URL=http://localhost:8118/v1
