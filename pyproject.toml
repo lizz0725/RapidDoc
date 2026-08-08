@@ -89,6 +89,10 @@ gradio = [
     "gradio-pdf>=0.0.22",
 ]
 
+mysql = [
+    "pymysql>=1.1.1,<2",
+]
+
 core = [
     "openvino>=2024.6.0",
     "onnxruntime-gpu<=1.23.0",
@@ -127,6 +131,7 @@ rapid_doc = [
     "resources/*.txt",
     "resources/*.html",
     "resources/fasttext-langdetect/*",
+    "jobs/*.sql",
     "model/magika/config/*.json",
     "model/magika/models/**/*.json",
     "model/magika/models/**/*.onnx",

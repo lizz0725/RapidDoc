@@ -1,0 +1,170 @@
+"""异步 Job 的文件目录布局与原子文件操作。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+from pathlib import Path, PurePath
+
+
+class ArtifactStore:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def ensure_layout(self) -> None:
+        for path in (
+            self.root,
+            self.root / "inputs",
+            self.root / "attempts",
+            self.root / "cache",
+            self.root / "staging",
+            self.root / "control",
+        ):
+            path.mkdir(parents=True, exist_ok=True)
+
+    def staging_path(self, upload_token: str) -> Path:
+        return self.root / "staging" / f"{_safe_component(upload_token)}.upload"
+
+    def input_path(self, job_id: str, stored_filename: str) -> Path:
+        return self.root / "inputs" / _safe_component(job_id) / _safe_filename(stored_filename)
+
+    def attempt_result_path(self, job_id: str, attempt_token: str) -> Path:
+        return (
+            self.root
+            / "attempts"
+            / _safe_component(job_id)
+            / _safe_component(attempt_token)
+            / "result.json.tmp"
+        )
+
+    def cache_result_path(self, tenant_id: str, source_sha256: str, suffix: str) -> Path:
+        if suffix not in {"json", "md"}:
+            raise ValueError("cache result suffix must be json or md")
+        return (
+            self.root
+            / "cache"
+            / tenant_storage_key(tenant_id)
+            / _safe_sha256(source_sha256)
+            / f"result.{suffix}"
+        )
+
+    def read_result_json(self, relative_path: str) -> dict[str, object]:
+        """读取 Worker 发布的结构化结果，并拒绝越出任务目录的路径。"""
+
+        path = self._path_from_relative(relative_path)
+        try:
+            content = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("result artifact is not valid JSON") from exc
+        if not isinstance(content, dict) or not isinstance(content.get("markdown"), str):
+            raise ValueError("result artifact does not contain markdown")
+        return content
+
+    def write_bytes_atomic(self, destination: Path, content: bytes) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(prefix=".pending-", dir=destination.parent)
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as output_file:
+                output_file.write(content)
+                output_file.flush()
+                os.fsync(output_file.fileno())
+            os.replace(temporary_path, destination)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
+
+    def publish(self, temporary_path: Path, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(temporary_path, destination)
+
+    def retained_bytes(self) -> int:
+        """统计受第一期固定磁盘预算约束的任务文件。"""
+
+        total = 0
+        for directory in ("inputs", "attempts", "cache", "staging"):
+            root = self.root / directory
+            if not root.exists():
+                continue
+            for path in root.rglob("*"):
+                if path.is_file():
+                    total += path.stat().st_size
+        return total
+
+    def remove_job_artifacts(self, job_id: str) -> None:
+        """删除已从数据库清除的 Job 输入和 attempt 临时目录。"""
+
+        safe_job_id = _safe_component(job_id)
+        self.remove_tree(self.root / "inputs" / safe_job_id)
+        self.remove_tree(self.root / "attempts" / safe_job_id)
+
+    def remove_cache_artifacts(self, tenant_id: str, source_sha256: str) -> None:
+        """删除已从缓存表清除的一份共享 OCR 结果。"""
+
+        cache_directory = self.cache_result_path(tenant_id, source_sha256, "json").parent
+        self.remove_tree(cache_directory)
+
+    def remove_stale_staging(self, older_than: int) -> int:
+        """删除超过保留阈值的上传暂存文件，返回删除数量。"""
+
+        staging_directory = self.root / "staging"
+        if not staging_directory.exists():
+            return 0
+        removed = 0
+        for path in staging_directory.iterdir():
+            if not path.is_file() or path.stat().st_mtime > older_than:
+                continue
+            self.remove_file(path)
+            removed += 1
+        return removed
+
+    def request_worker_restart(self, reason: str) -> None:
+        """通知容器启动监督器重启 OCR Worker，不直接在维护线程中杀进程。"""
+
+        signal_path = self.root / "control" / "restart-workers.request"
+        self.write_bytes_atomic(signal_path, reason.encode("utf-8"))
+
+    def remove_file(self, path: Path) -> None:
+        self._assert_within_root(path)
+        path.unlink(missing_ok=True)
+
+    def remove_tree(self, path: Path) -> None:
+        self._assert_within_root(path)
+        shutil.rmtree(path, ignore_errors=True)
+
+    def _assert_within_root(self, path: Path) -> None:
+        if self.root not in (path, *path.parents):
+            raise ValueError("refusing to delete a path outside the artifact root")
+
+    def _path_from_relative(self, relative_path: str) -> Path:
+        relative = PurePath(relative_path)
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise ValueError("result path is unsafe")
+        path = self.root.joinpath(*relative.parts)
+        self._assert_within_root(path)
+        return path
+
+
+def tenant_storage_key(tenant_id: str) -> str:
+    return hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()
+
+
+def _safe_component(value: str) -> str:
+    if not value or PurePath(value).name != value or value in {".", ".."}:
+        raise ValueError("path component is unsafe")
+    return value
+
+
+def _safe_filename(value: str) -> str:
+    if not value or PurePath(value).name != value or value in {".", ".."}:
+        raise ValueError("stored filename is unsafe")
+    return value
+
+
+def _safe_sha256(value: str) -> str:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("source_sha256 must be a lowercase SHA-256 digest")
+    return value
