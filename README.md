@@ -2,6 +2,14 @@
 
 [English](README_EN.md) | [中文](README.md)
 
+## 🔧 Fork 说明：面向业务系统集成的异步 OCR 服务
+
+本仓库基于 [RapidAI/RapidDoc](https://github.com/RapidAI/RapidDoc) 二次开发，保留上游 RapidDoc 的同步文档解析能力，同时补充了一套面向企业内部系统集成的异步 Job 能力。
+
+这次定制主要解决业务系统直接调用同步 OCR 接口时容易遇到的问题：大文件请求长时间阻塞、多个业务并发调用缺少排队控制、容器重启后任务状态不可恢复、相同文件重复识别浪费资源、任务完成后无法主动通知业务方等。当前 fork 增加了 FIFO 任务队列、MySQL 持久化、异步 Worker、结果缓存、终态回调、统一日志和 CPU 离线部署镜像等能力。
+
+如果你正在寻找“如何把 RapidDoc 改造成可被业务系统稳定调用的异步文档解析服务”的参考，可以先看 README 末尾的 [本分支定制内容](#-本分支定制内容)，再查看 [异步任务并发控制与结果缓存设计](docs/architecture/rapid-doc-async-job-concurrency-consensus-zh-CN.md) 和 [Job API 接口参考](docs/job-api-reference.md)。
+
 ## 😺 项目介绍
 
 **RapidDoc 是一个轻量级、专注于文档解析的开源框架，支持 **OCR、版面分析、公式识别、表格识别和阅读顺序恢复** 等多种功能，支持将复杂 PDF 文档转换为 Markdown、JSON、WORD、HTML 格式。**
